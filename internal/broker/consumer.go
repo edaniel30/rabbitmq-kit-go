@@ -131,8 +131,8 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					cancel()
 
 					if retryErr == errors.ErrMaxRetriesExceeded {
-						c.client.config.Logger.Warn("Consumer Worker %d: Max retries exceeded, discarding message", workerID)
-						messageContext.Ack() // Ack to remove from queue (will go to DLX if configured)
+						c.client.config.Logger.Warn("Consumer Worker %d: Max retries exceeded, sending to DLQ", workerID)
+						messageContext.Nack(false) // Nack without requeue (will go to DLX if configured)
 					} else if retryErr != nil {
 						c.client.config.Logger.Error("Consumer Worker %d: Retry failed: %v, nacking message", workerID, retryErr)
 						messageContext.Nack(false) // Nack without requeue

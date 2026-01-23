@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -20,6 +21,7 @@ type Publisher struct {
 	deliveryTag uint64
 	done        chan struct{}
 	started     bool
+	channelID   uintptr // Track which channel we're registered with
 }
 
 // NewPublisher creates a new Publisher with the given client.
@@ -37,6 +39,10 @@ func NewPublisher(client *Client) *Publisher {
 	// Setup high-performance confirms if enabled
 	p.client.mu.RLock()
 	confirmsEnabled := p.client.config.PublisherConfirms
+	if confirmsEnabled && p.client.channel != nil {
+		// Store initial channel ID
+		p.channelID = uintptr(unsafe.Pointer(p.client.channel))
+	}
 	p.client.mu.RUnlock()
 
 	if confirmsEnabled {
@@ -67,6 +73,73 @@ func (p *Publisher) setupConfirms() {
 	go p.processConfirmations()
 
 	p.client.config.Logger.Info("Publisher: High-performance confirms enabled")
+}
+
+// ensureConfirmsSetup checks if confirms are setup for the current channel.
+// If the channel has been recreated (reconnection), this will reset the
+// delivery tag counter and re-setup confirms.
+func (p *Publisher) ensureConfirmsSetup() {
+	p.client.mu.RLock()
+	currentChannelID := uintptr(0)
+	if p.client.channel != nil {
+		// Use channel pointer as unique ID
+		currentChannelID = uintptr(unsafe.Pointer(p.client.channel))
+	}
+	confirmsEnabled := p.client.config.PublisherConfirms
+	p.client.mu.RUnlock()
+
+	if !confirmsEnabled {
+		return
+	}
+
+	// Check if channel has changed (reconnection)
+	p.mu.Lock()
+	needsReset := currentChannelID != p.channelID
+	oldDone := p.done
+
+	if needsReset {
+		// Channel has changed - prepare for reset
+		if p.started {
+			// Create new done channel before stopping old processor
+			p.done = make(chan struct{})
+			p.started = false
+		}
+
+		// Reset delivery tag counter to 0 (next publish will be tag 1)
+		atomic.StoreUint64(&p.deliveryTag, 0)
+
+		// Clear pending map
+		for _, resultChan := range p.pending {
+			close(resultChan)
+		}
+		p.pending = make(map[uint64]chan bool)
+
+		// Update channel ID
+		p.channelID = currentChannelID
+	}
+	p.mu.Unlock()
+
+	// Stop old processor AFTER releasing lock to avoid deadlock
+	if needsReset && oldDone != nil {
+		close(oldDone)
+		// Give old goroutine time to exit
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Re-setup confirms with new channel
+	if needsReset {
+		p.client.mu.RLock()
+		if p.client.channel != nil {
+			p.mu.Lock()
+			p.confirms = p.client.channel.NotifyPublish(make(chan amqp.Confirmation, 100))
+			p.started = true
+			p.mu.Unlock()
+
+			go p.processConfirmations()
+			p.client.config.Logger.Info("Publisher: Confirms re-initialized after reconnection")
+		}
+		p.client.mu.RUnlock()
+	}
 }
 
 // processConfirmations runs in a background goroutine and processes
@@ -170,6 +243,9 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 //	    },
 //	})
 func (p *Publisher) PublishWithOptions(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) error {
+	// Ensure confirms are setup (handles reconnection)
+	p.ensureConfirmsSetup()
+
 	// Check if client is closed
 	p.client.mu.RLock()
 	if p.client.closed {
@@ -300,6 +376,9 @@ func (p *Publisher) PublishBatchPipeline(ctx context.Context, messages []Publish
 	if len(messages) == 0 {
 		return nil, nil
 	}
+
+	// Ensure confirms are setup (handles reconnection)
+	p.ensureConfirmsSetup()
 
 	// Check if client is closed
 	p.client.mu.RLock()
