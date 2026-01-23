@@ -2,7 +2,6 @@ package broker
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -80,6 +79,16 @@ func (c *Client) connect() error {
 		return errors.NewConnectionError("set qos", err)
 	}
 
+	// Enable publisher confirms if configured
+	if c.config.PublisherConfirms {
+		if err := ch.Confirm(false); err != nil {
+			ch.Close()
+			conn.Close()
+			return errors.NewConnectionError("enable publisher confirms", err)
+		}
+		c.config.Logger.Info("Publisher confirms enabled")
+	}
+
 	// Setup topology (exchanges, queues, bindings)
 	if err := c.setupTopology(); err != nil {
 		ch.Close()
@@ -94,7 +103,7 @@ func (c *Client) connect() error {
 	go func() {
 		err := <-closeErrChan
 		if err != nil && !c.closed {
-			log.Printf("[RabbitMQ] Connection closed: %v", err)
+			c.config.Logger.Warn("Connection closed: %v", err)
 			c.done <- true
 		}
 	}()
@@ -104,6 +113,13 @@ func (c *Client) connect() error {
 
 // setupTopology declares exchanges, queues, and bindings.
 func (c *Client) setupTopology() error {
+	// Setup DLQ if enabled
+	if c.config.DLQEnabled {
+		if err := c.setupDLQ(); err != nil {
+			return err
+		}
+	}
+
 	// Declare exchanges
 	for _, ex := range c.config.Exchanges {
 		err := c.channel.ExchangeDeclare(
@@ -122,37 +138,113 @@ func (c *Client) setupTopology() error {
 
 	// Declare queues and bindings
 	for _, q := range c.config.Queues {
+		// If DLQ is enabled, automatically configure DLX for this queue
+		queueConfig := q
+		if c.config.DLQEnabled {
+			queueConfig = configQueueWithDLX(q, c.config.DLQConfig)
+		}
+
 		// Declare queue
 		_, err := c.channel.QueueDeclare(
-			q.Name,
-			q.Durable,
-			q.AutoDelete,
-			q.Exclusive,
+			queueConfig.Name,
+			queueConfig.Durable,
+			queueConfig.AutoDelete,
+			queueConfig.Exclusive,
 			false, // no-wait
-			q.Args,
+			queueConfig.Args,
 		)
 		if err != nil {
-			return errors.NewTopologyError("declare_queue", q.Name, err)
+			return errors.NewTopologyError("declare_queue", queueConfig.Name, err)
 		}
 
 		// Bind queue to exchange with routing keys
-		if q.Exchange != "" {
-			for _, routingKey := range q.RoutingKeys {
+		if queueConfig.Exchange != "" {
+			for _, routingKey := range queueConfig.RoutingKeys {
 				err := c.channel.QueueBind(
-					q.Name,
+					queueConfig.Name,
 					routingKey,
-					q.Exchange,
+					queueConfig.Exchange,
 					false, // no-wait
 					nil,   // args
 				)
 				if err != nil {
-					return errors.NewTopologyError("bind_queue", q.Name, err)
+					return errors.NewTopologyError("bind_queue", queueConfig.Name, err)
 				}
 			}
 		}
 	}
 
 	return nil
+}
+
+// setupDLQ sets up the Dead Letter Exchange and Dead Letter Queues.
+//
+// This method:
+//  1. Declares the Dead Letter Exchange (DLX)
+//  2. Creates a DLQ queue for each configured queue
+//  3. Binds each DLQ to the DLX with appropriate routing keys
+func (c *Client) setupDLQ() error {
+	dlqCfg := c.config.DLQConfig
+
+	// Declare Dead Letter Exchange
+	err := c.channel.ExchangeDeclare(
+		dlqCfg.ExchangeName,
+		dlqCfg.ExchangeType,
+		dlqCfg.Durable,
+		dlqCfg.AutoDelete,
+		false, // internal
+		false, // no-wait
+		nil,   // args
+	)
+	if err != nil {
+		return errors.NewTopologyError("declare_dlx", dlqCfg.ExchangeName, err)
+	}
+
+	c.config.Logger.Info("Client: DLX exchange declared [exchange=%s]", dlqCfg.ExchangeName)
+
+	// Create DLQ queue for each configured queue
+	for _, mainQueue := range c.config.Queues {
+		dlqName := dlqCfg.GetDLQName(mainQueue.Name)
+		routingKey := dlqCfg.GetDLXRoutingKey(mainQueue.Name)
+
+		// Declare DLQ
+		_, err := c.channel.QueueDeclare(
+			dlqName,
+			dlqCfg.Durable,
+			dlqCfg.AutoDelete,
+			false, // exclusive
+			false, // no-wait
+			nil,   // args
+		)
+		if err != nil {
+			return errors.NewTopologyError("declare_dlq", dlqName, err)
+		}
+
+		// Bind DLQ to DLX
+		err = c.channel.QueueBind(
+			dlqName,
+			routingKey,
+			dlqCfg.ExchangeName,
+			false, // no-wait
+			nil,   // args
+		)
+		if err != nil {
+			return errors.NewTopologyError("bind_dlq", dlqName, err)
+		}
+
+		c.config.Logger.Info("Client: DLQ configured [queue=%s, dlq=%s, routing_key=%s]",
+			mainQueue.Name, dlqName, routingKey)
+	}
+
+	return nil
+}
+
+// configQueueWithDLX configures a queue to use Dead Letter Exchange using WithDLX method.
+func configQueueWithDLX(queue config.QueueConfig, dlqCfg config.DLQConfig) config.QueueConfig {
+	// Make a copy to avoid modifying the original
+	queueCopy := queue
+	queueCopy.WithDLX(dlqCfg.ExchangeName, dlqCfg.GetDLXRoutingKey(queue.Name))
+	return queueCopy
 }
 
 // handleReconnect handles automatic reconnection when connection is lost.
@@ -167,17 +259,17 @@ func (c *Client) handleReconnect() {
 		}
 		c.mu.RUnlock()
 
-		log.Printf("[RabbitMQ] Attempting to reconnect in %v...", c.config.ReconnectDelay)
+		c.config.Logger.Info("Attempting to reconnect in %v...", c.config.ReconnectDelay)
 		time.Sleep(c.config.ReconnectDelay)
 
 		for {
 			err := c.connect()
 			if err == nil && c.conn != nil && !c.conn.IsClosed() {
-				log.Println("[RabbitMQ] Successfully reconnected")
+				c.config.Logger.Info("Successfully reconnected")
 				break
 			}
 
-			log.Printf("[RabbitMQ] Reconnection failed: %v. Retrying in %v...", err, c.config.ReconnectDelay)
+			c.config.Logger.Error("Reconnection failed: %v. Retrying in %v...", err, c.config.ReconnectDelay)
 			time.Sleep(c.config.ReconnectDelay)
 
 			c.mu.RLock()
@@ -188,6 +280,26 @@ func (c *Client) handleReconnect() {
 			c.mu.RUnlock()
 		}
 	}
+}
+
+// GetChannel returns the underlying AMQP channel for advanced operations.
+//
+// Returns an error if the client is closed or the channel is not available.
+//
+// This should be used cautiously as it exposes the low-level channel.
+func (c *Client) GetChannel() (*amqp.Channel, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.closed {
+		return nil, errors.ErrClientClosed
+	}
+
+	if c.channel == nil {
+		return nil, errors.ErrNoChannel
+	}
+
+	return c.channel, nil
 }
 
 // Close gracefully closes the RabbitMQ connection.

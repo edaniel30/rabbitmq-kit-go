@@ -16,14 +16,17 @@ var (
 	// ErrNoChannel is returned when the client has no active channel.
 	ErrNoChannel = errors.New("rabbitmq: no active channel")
 
-	// ErrNoHandler is returned when no handler is registered for an event type.
-	ErrNoHandler = errors.New("rabbitmq: no handler registered for event type")
-
 	// ErrMaxRetriesExceeded is returned when a message exceeds max retries.
 	ErrMaxRetriesExceeded = errors.New("rabbitmq: max retries exceeded")
 
 	// ErrNoHandlersRegistered is returned when StartConsume is called without registering any handlers.
 	ErrNoHandlersRegistered = errors.New("rabbitmq: no handlers registered, call RegisterHandler before StartConsume")
+
+	// ErrPublishNotConfirmed is returned when a message publish is not confirmed by RabbitMQ.
+	ErrPublishNotConfirmed = errors.New("rabbitmq: message publish was not confirmed by broker")
+
+	// ErrPublishConfirmTimeout is returned when waiting for publish confirmation times out.
+	ErrPublishConfirmTimeout = errors.New("rabbitmq: timeout waiting for publish confirmation")
 )
 
 // ConfigError represents a configuration validation error.

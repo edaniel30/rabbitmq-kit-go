@@ -1,28 +1,44 @@
 package broker
 
 import (
-	"log"
 	"sync"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
+	"github.com/edaniel30/rabbitmq-kit-go/internal/circuitbreaker"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
 )
 
 // Consumer is a consumer of messages from a queue.
 type Consumer struct {
-	client    *Client
-	publisher *Publisher
-	mu        sync.RWMutex
-	router    *router.Router
+	client         *Client
+	publisher      *Publisher
+	mu             sync.RWMutex
+	router         *router.Router
+	circuitBreaker *circuitbreaker.CircuitBreaker
 }
 
 // NewConsumer creates a new Consumer with the given client.
 func NewConsumer(client *Client, publisher *Publisher, router *router.Router) *Consumer {
-	return &Consumer{
+	c := &Consumer{
 		client:    client,
 		publisher: publisher,
 		router:    router,
 	}
+
+	// Initialize circuit breaker if enabled
+	if client.config.CircuitBreakerEnabled {
+		cbConfig := circuitbreaker.Config{
+			MaxFailures:         client.config.CircuitBreakerMaxFailures,
+			ResetTimeout:        client.config.CircuitBreakerResetTimeout,
+			HalfOpenMaxRequests: client.config.CircuitBreakerHalfOpenRequests,
+			OnStateChange: func(from, to circuitbreaker.State) {
+				client.config.Logger.Warn("Consumer: Circuit breaker state changed from %s to %s", from, to)
+			},
+		}
+		c.circuitBreaker = circuitbreaker.New(cbConfig)
+	}
+
+	return c
 }
 
 // Consume starts consuming messages from a queue with multiple workers.
@@ -74,7 +90,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 	}
 
 	// Create retry handler
-	retryHandler := NewHandler(*c.publisher, c.client.config.MaxRetries)
+	retryHandler := NewHandler(c.publisher, c.client.config.MaxRetries)
 
 	// Start worker goroutines
 	for i := 0; i < workers; i++ {
@@ -84,27 +100,41 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					Delivery: delivery,
 				}
 
+				// Check circuit breaker if enabled
+				if c.circuitBreaker != nil && !c.circuitBreaker.AllowRequest() {
+					metrics := c.circuitBreaker.GetMetrics()
+					c.client.config.Logger.Warn("Consumer Worker %d: Circuit breaker is %s, rejecting message", workerID, metrics.State)
+					// Nack without requeue - let DLX handle it or discard
+					messageContext.Nack(false)
+					continue
+				}
+
 				// Call user handler
 				serviceHandler := c.router.GetHandler(messageContext.GetType())
 				if serviceHandler == nil {
-					log.Printf("[RabbitMQ Worker %d] No handler found for message type: %s", workerID, messageContext.GetType())
+					c.client.config.Logger.Warn("Consumer Worker %d: No handler found for message type: %s", workerID, messageContext.GetType())
 					messageContext.Ack()
 					continue
 				}
 
 				if err := serviceHandler.Execute(messageContext); err != nil {
-					log.Printf("[RabbitMQ Worker %d] Handler error: %v", workerID, err)
+					c.client.config.Logger.Error("Consumer Worker %d: Handler error: %v", workerID, err)
+
+					// Record failure in circuit breaker
+					if c.circuitBreaker != nil {
+						c.circuitBreaker.RecordFailure()
+					}
 
 					// Try to retry the message
 					retryCtx, cancel := c.client.NewContext()
 					retryErr := retryHandler.Retry(retryCtx, delivery)
 					cancel()
 
-					if retryErr == ErrMaxRetriesExceeded {
-						log.Printf("[RabbitMQ Worker %d] Max retries exceeded, discarding message", workerID)
+					if retryErr == errors.ErrMaxRetriesExceeded {
+						c.client.config.Logger.Warn("Consumer Worker %d: Max retries exceeded, discarding message", workerID)
 						messageContext.Ack() // Ack to remove from queue (will go to DLX if configured)
 					} else if retryErr != nil {
-						log.Printf("[RabbitMQ Worker %d] Retry failed: %v, nacking message", workerID, retryErr)
+						c.client.config.Logger.Error("Consumer Worker %d: Retry failed: %v, nacking message", workerID, retryErr)
 						messageContext.Nack(false) // Nack without requeue
 					} else {
 						// Successfully requeued, ack the original
@@ -113,7 +143,12 @@ func (c *Consumer) Consume(queue string, workers int) error {
 				} else {
 					// Success, acknowledge message
 					if ackErr := messageContext.Ack(); ackErr != nil {
-						log.Printf("[RabbitMQ Worker %d] Failed to ack message: %v", workerID, ackErr)
+						c.client.config.Logger.Error("Consumer Worker %d: Failed to ack message: %v", workerID, ackErr)
+					}
+
+					// Record success in circuit breaker
+					if c.circuitBreaker != nil {
+						c.circuitBreaker.RecordSuccess()
 					}
 				}
 			}
@@ -122,3 +157,38 @@ func (c *Consumer) Consume(queue string, workers int) error {
 
 	return nil
 }
+
+// GetCircuitBreakerMetrics returns the current circuit breaker metrics.
+//
+// Returns nil if circuit breaker is not enabled.
+//
+// Example:
+//
+//	metrics := consumer.GetCircuitBreakerMetrics()
+//	if metrics != nil {
+//	    log.Printf("Circuit breaker: %s, failures: %d", metrics.State, metrics.Failures)
+//	}
+func (c *Consumer) GetCircuitBreakerMetrics() *circuitbreaker.Metrics {
+	if c.circuitBreaker == nil {
+		return nil
+	}
+
+	metrics := c.circuitBreaker.GetMetrics()
+	return &metrics
+}
+
+// ResetCircuitBreaker manually resets the circuit breaker to closed state.
+//
+// This should be used cautiously, typically only for manual intervention
+// or testing purposes.
+//
+// Returns false if circuit breaker is not enabled.
+func (c *Consumer) ResetCircuitBreaker() bool {
+	if c.circuitBreaker == nil {
+		return false
+	}
+
+	c.circuitBreaker.Reset()
+	return true
+}
+

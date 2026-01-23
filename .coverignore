@@ -1,0 +1,7 @@
+# Coverage Ignore Patterns
+# This file specifies packages and files that should be excluded from code coverage reports.
+# Each line represents a grep pattern to exclude from coverage analysis.
+
+# Examples - Example applications are not part of the library's testable code
+/examples
+

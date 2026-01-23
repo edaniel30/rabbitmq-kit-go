@@ -4,18 +4,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Handler handles message retry logic.
 type Handler struct {
-	publisher  Publisher
+	publisher  *Publisher
 	maxRetries int
 }
 
 // NewHandler creates a new retry handler.
-func NewHandler(publisher Publisher, maxRetries int) *Handler {
+func NewHandler(publisher *Publisher, maxRetries int) *Handler {
 	return &Handler{
 		publisher:  publisher,
 		maxRetries: maxRetries,
@@ -54,7 +55,7 @@ func (h *Handler) Retry(ctx context.Context, delivery amqp.Delivery) error {
 	shouldRetry, retryCount := h.ShouldRetry(delivery)
 
 	if !shouldRetry {
-		return ErrMaxRetriesExceeded
+		return errors.ErrMaxRetriesExceeded
 	}
 
 	// Increment retry count
@@ -85,14 +86,4 @@ func (h *Handler) Retry(ctx context.Context, delivery amqp.Delivery) error {
 	}
 
 	return h.publisher.PublishWithOptions(ctx, delivery.Exchange, delivery.RoutingKey, msg)
-}
-
-// ErrMaxRetriesExceeded is returned when a message exceeds max retries.
-var ErrMaxRetriesExceeded = &MaxRetriesError{}
-
-// MaxRetriesError represents an error when max retries is exceeded.
-type MaxRetriesError struct{}
-
-func (e *MaxRetriesError) Error() string {
-	return "rabbitmq: max retries exceeded"
 }

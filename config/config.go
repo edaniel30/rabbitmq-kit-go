@@ -5,65 +5,8 @@ import (
 	"time"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
+	"github.com/edaniel30/rabbitmq-kit-go/internal/logger"
 )
-
-// ExchangeConfig defines configuration for a RabbitMQ exchange.
-type ExchangeConfig struct {
-	// Name is the name of the exchange
-	Name string
-
-	// Type is the exchange type: "direct", "fanout", "topic", or "headers"
-	Type string
-
-	// Durable indicates if the exchange should survive broker restart
-	// Default: true
-	Durable bool
-
-	// AutoDelete indicates if the exchange should be deleted when no longer used
-	// Default: false
-	AutoDelete bool
-
-	// Internal indicates if the exchange is internal (cannot be published to directly)
-	// Default: false
-	Internal bool
-
-	// Args are optional exchange arguments
-	Args map[string]interface{}
-}
-
-// QueueConfig defines configuration for a RabbitMQ queue with bindings.
-type QueueConfig struct {
-	// Name is the name of the queue
-	Name string
-
-	// Exchange is the name of the exchange to bind this queue to (optional)
-	Exchange string
-
-	// RoutingKeys are the routing keys to use for binding (optional)
-	// Multiple routing keys will create multiple bindings
-	RoutingKeys []string
-
-	// Durable indicates if the queue should survive broker restart
-	// Default: true
-	Durable bool
-
-	// AutoDelete indicates if the queue should be deleted when no longer used
-	// Default: false
-	AutoDelete bool
-
-	// Exclusive indicates if the queue is exclusive to this connection
-	// Default: false
-	Exclusive bool
-
-	// Args are optional queue arguments for advanced features.
-	// Common arguments:
-	//   - "x-dead-letter-exchange": DLX name for failed messages
-	//   - "x-dead-letter-routing-key": routing key for DLX
-	//   - "x-message-ttl": message TTL in milliseconds (int32)
-	//   - "x-max-length": maximum number of messages in queue (int32)
-	//   - "x-max-priority": maximum priority level (int32, typically 1-10)
-	Args map[string]any
-}
 
 // Config holds the configuration for the RabbitMQ client.
 type Config struct {
@@ -71,10 +14,23 @@ type Config struct {
 	URI string // RabbitMQ connection URI (e.g., "amqp://user:pass@host:5672/")
 
 	// Optional fields with defaults
-	ReconnectDelay time.Duration // Delay between reconnection attempts (default: 5s)
-	Timeout        time.Duration // Default timeout for operations (default: 10s)
-	PrefetchCount  int           // Number of messages to prefetch (default: 10)
-	MaxRetries     int           // Maximum number of retries for failed messages (default: 3)
+	ReconnectDelay    time.Duration // Delay between reconnection attempts (default: 5s)
+	Timeout           time.Duration // Default timeout for operations (default: 10s)
+	PrefetchCount     int           // Number of messages to prefetch (default: 10)
+	MaxRetries        int           // Maximum number of retries for failed messages (default: 3)
+	PublisherConfirms bool          // Enable publisher confirms for guaranteed delivery (default: false)
+	ConfirmTimeout    time.Duration // Timeout for waiting publisher confirms (default: 5s)
+	Logger            logger.Logger // Logger for internal logging (default: DefaultLogger)
+
+	// Circuit Breaker configuration
+	CircuitBreakerEnabled          bool          // Enable circuit breaker for consumers (default: false)
+	CircuitBreakerMaxFailures      int           // Max failures before opening circuit (default: 5)
+	CircuitBreakerResetTimeout     time.Duration // Time to wait before attempting half-open (default: 60s)
+	CircuitBreakerHalfOpenRequests int           // Max requests in half-open state (default: 3)
+
+	// Dead Letter Queue configuration
+	DLQEnabled bool      // Enable automatic DLQ setup (default: false)
+	DLQConfig  DLQConfig // DLQ configuration options
 
 	// Topology configuration
 	Exchanges []ExchangeConfig // Exchanges to declare on connect
@@ -91,16 +47,28 @@ type Option func(*Config)
 //   - Timeout: 10 seconds
 //   - PrefetchCount: 10
 //   - MaxRetries: 3
+//   - Logger: DefaultLogger
+//   - CircuitBreakerEnabled: false
+//   - CircuitBreakerMaxFailures: 5
+//   - CircuitBreakerResetTimeout: 60 seconds
+//   - CircuitBreakerHalfOpenRequests: 3
 //   - Exchanges: empty
 //   - Queues: empty
 func DefaultConfig() Config {
 	return Config{
-		ReconnectDelay: 5 * time.Second,
-		Timeout:        10 * time.Second,
-		PrefetchCount:  10,
-		MaxRetries:     3,
-		Exchanges:      []ExchangeConfig{},
-		Queues:         []QueueConfig{},
+		ReconnectDelay:                 5 * time.Second,
+		Timeout:                        10 * time.Second,
+		PrefetchCount:                  10,
+		MaxRetries:                     3,
+		Logger:                         logger.NewDefaultLogger(),
+		CircuitBreakerEnabled:          false,
+		CircuitBreakerMaxFailures:      5,
+		CircuitBreakerResetTimeout:     60 * time.Second,
+		CircuitBreakerHalfOpenRequests: 3,
+		DLQEnabled:                     false,
+		DLQConfig:                      DefaultDLQConfig(),
+		Exchanges:                      []ExchangeConfig{},
+		Queues:                         []QueueConfig{},
 	}
 }
 
@@ -224,5 +192,179 @@ func WithExchanges(exchanges []ExchangeConfig) Option {
 func WithQueues(queues []QueueConfig) Option {
 	return func(c *Config) {
 		c.Queues = queues
+	}
+}
+
+// WithPublisherConfirms enables or disables publisher confirms.
+//
+// When enabled, the client will wait for RabbitMQ to confirm that messages
+// have been received and persisted. This provides guaranteed delivery but
+// has a performance impact.
+//
+// Recommended for production environments where message loss is not acceptable.
+// Default: false
+func WithPublisherConfirms(enabled bool) Option {
+	return func(c *Config) {
+		c.PublisherConfirms = enabled
+	}
+}
+
+// WithConfirmTimeout sets the timeout for waiting publisher confirms.
+//
+// This is only used when PublisherConfirms is enabled.
+// Default: 5 seconds
+func WithConfirmTimeout(timeout time.Duration) Option {
+	return func(c *Config) {
+		c.ConfirmTimeout = timeout
+	}
+}
+
+// WithLogger sets a custom logger for the RabbitMQ client.
+//
+// This allows you to inject your own logger implementation (zap, logrus, zerolog, etc.)
+// instead of using the default logger.
+//
+// Example with custom logger:
+//
+//	type MyLogger struct{}
+//
+//	func (l *MyLogger) Info(msg string, args ...any) {
+//	    // Your logging implementation
+//	}
+//	// ... implement other methods
+//
+//	eventBus, _ := rabbitmq.NewEventBus(
+//	    config.DefaultConfig(),
+//	    config.WithLogger(&MyLogger{}),
+//	)
+//
+// To disable logging completely, use NoopLogger:
+//
+//	eventBus, _ := rabbitmq.NewEventBus(
+//	    config.DefaultConfig(),
+//	    config.WithLogger(&logger.NoopLogger{}),
+//	)
+//
+// Default: DefaultLogger (writes to stderr with timestamps)
+func WithLogger(log logger.Logger) Option {
+	return func(c *Config) {
+		c.Logger = log
+	}
+}
+
+// WithCircuitBreaker enables or disables the circuit breaker for consumers.
+//
+// When enabled, the consumer will automatically stop processing messages
+// when error rates are too high, protecting against cascading failures.
+//
+// The circuit breaker has three states:
+//   - Closed: Normal operation, all messages processed
+//   - Open: Too many failures, messages are rejected (nacked without requeue)
+//   - Half-Open: Testing recovery, limited messages allowed
+//
+// Example:
+//
+//	eventBus, _ := rabbitmq.NewEventBus(
+//	    config.DefaultConfig(),
+//	    config.WithCircuitBreaker(true),
+//	    config.WithCircuitBreakerMaxFailures(10),
+//	    config.WithCircuitBreakerResetTimeout(2 * time.Minute),
+//	)
+//
+// Default: false (disabled)
+func WithCircuitBreaker(enabled bool) Option {
+	return func(c *Config) {
+		c.CircuitBreakerEnabled = enabled
+	}
+}
+
+// WithCircuitBreakerMaxFailures sets the maximum number of consecutive
+// failures before opening the circuit.
+//
+// Default: 5
+func WithCircuitBreakerMaxFailures(n int) Option {
+	return func(c *Config) {
+		c.CircuitBreakerMaxFailures = n
+	}
+}
+
+// WithCircuitBreakerResetTimeout sets how long to wait in open state
+// before attempting to transition to half-open.
+//
+// Default: 60 seconds
+func WithCircuitBreakerResetTimeout(d time.Duration) Option {
+	return func(c *Config) {
+		c.CircuitBreakerResetTimeout = d
+	}
+}
+
+// WithCircuitBreakerHalfOpenRequests sets the number of requests to allow
+// in half-open state before deciding whether to close or re-open the circuit.
+//
+// Default: 3
+func WithCircuitBreakerHalfOpenRequests(n int) Option {
+	return func(c *Config) {
+		c.CircuitBreakerHalfOpenRequests = n
+	}
+}
+
+// WithDLQ enables automatic Dead Letter Queue (DLQ) setup with default configuration.
+//
+// When enabled, the library will automatically:
+//   - Create a Dead Letter Exchange (DLX) named "dlx.exchange"
+//   - Create DLQ queues with prefix "dlq." for each main queue
+//   - Configure main queues to route failed messages to DLQ
+//
+// Example:
+//
+//	eventBus, _ := rabbitmq.NewEventBus(
+//	    config.DefaultConfig(),
+//	    config.WithDLQ(true),
+//	)
+//
+// Default: false (disabled)
+func WithDLQ(enabled bool) Option {
+	return func(c *Config) {
+		c.DLQEnabled = enabled
+	}
+}
+
+// WithCustomDLQ enables DLQ with custom configuration.
+//
+// This allows full control over DLX naming, queue prefix, exchange type, etc.
+//
+// Example:
+//
+//	eventBus, _ := rabbitmq.NewEventBus(
+//	    config.DefaultConfig(),
+//	    config.WithCustomDLQ(config.DLQConfig{
+//	        ExchangeName: "my.custom.dlx",
+//	        QueuePrefix:  "failed.",
+//	        ExchangeType: "topic",
+//	        Durable:      true,
+//	    }),
+//	)
+func WithCustomDLQ(dlqConfig DLQConfig) Option {
+	return func(c *Config) {
+		c.DLQEnabled = true
+		c.DLQConfig = dlqConfig
+	}
+}
+
+// WithDLQExchange sets the Dead Letter Exchange name.
+//
+// Default: "dlx.exchange"
+func WithDLQExchange(exchangeName string) Option {
+	return func(c *Config) {
+		c.DLQConfig.ExchangeName = exchangeName
+	}
+}
+
+// WithDLQPrefix sets the prefix for DLQ queue names.
+//
+// Default: "dlq."
+func WithDLQPrefix(prefix string) Option {
+	return func(c *Config) {
+		c.DLQConfig.QueuePrefix = prefix
 	}
 }
