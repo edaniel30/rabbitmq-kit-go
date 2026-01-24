@@ -42,7 +42,9 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with coverage
-        run: go test -coverprofile=coverage.out -covermode=atomic .
+        run: |
+          # Run tests on all packages except excluded ones (from .coverignore)
+          go test -v -coverprofile=coverage.out -covermode=atomic $(go list ./... | grep -v -e '/examples' -e '/testing' -e '/internal/mocks')
 
       - name: Check coverage threshold
         run: |
