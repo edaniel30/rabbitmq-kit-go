@@ -17,7 +17,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"time"
@@ -34,8 +33,8 @@ type MetricEvent struct {
 	ServiceName string    `json:"service_name"`
 }
 
-func (e MetricEvent) Type() string      { return "metric.recorded" }
-func (e MetricEvent) Exchange() string  { return "metrics.exchange" }
+func (e MetricEvent) Type() string     { return "metric.recorded" }
+func (e MetricEvent) Exchange() string { return "metrics.exchange" }
 func (e MetricEvent) ToMap() map[string]any {
 	return map[string]any{
 		"type":         e.Type(),
@@ -65,7 +64,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	log.Println("✅ Connected to RabbitMQ with Publisher Confirms")
 
@@ -209,7 +208,7 @@ func generateMetricEvents(count int) []rabbitmq.Event {
 
 	for i := 0; i < count; i++ {
 		events[i] = MetricEvent{
-			MetricName:  fmt.Sprintf("cpu.usage.percent"),
+			MetricName:  "cpu.usage.percent",
 			Value:       float64(i%100) + 0.5,
 			Timestamp:   time.Now(),
 			ServiceName: services[i%len(services)],

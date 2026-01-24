@@ -31,14 +31,14 @@ import (
 
 // PaymentEvent represents a payment processing event
 type PaymentEvent struct {
-	PaymentID string  `json:"payment_id"`
-	Amount    float64 `json:"amount"`
-	UserID    string  `json:"user_id"`
-	ShouldFail bool   `json:"should_fail"` // For demo purposes
+	PaymentID  string  `json:"payment_id"`
+	Amount     float64 `json:"amount"`
+	UserID     string  `json:"user_id"`
+	ShouldFail bool    `json:"should_fail"` // For demo purposes
 }
 
-func (e PaymentEvent) Type() string      { return "payment.process" }
-func (e PaymentEvent) Exchange() string  { return "payments.exchange" }
+func (e PaymentEvent) Type() string     { return "payment.process" }
+func (e PaymentEvent) Exchange() string { return "payments.exchange" }
 func (e PaymentEvent) ToMap() map[string]any {
 	return map[string]any{
 		"type":        e.Type(),
@@ -60,7 +60,7 @@ func main() {
 		config.DefaultConfig(),
 		config.WithURI(rabbitURI),
 		config.WithMaxRetries(2), // Retry 2 times before DLQ
-		config.WithDLQ(true),      // Enable automatic DLQ setup
+		config.WithDLQ(true),     // Enable automatic DLQ setup
 		config.WithExchanges([]config.ExchangeConfig{
 			{Name: "payments.exchange", Type: "direct", Durable: true},
 		}),
@@ -76,7 +76,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	log.Println("✅ Connected to RabbitMQ with DLQ enabled")
 	log.Println("   DLX: dlx.exchange")
@@ -181,9 +181,7 @@ func (h *PaymentHandler) Execute(ctx *router.MessageContext) error {
 }
 
 // PaymentDLQHandler analyzes and handles failed messages from DLQ
-type PaymentDLQHandler struct {
-	eventBus *rabbitmq.EventBus
-}
+type PaymentDLQHandler struct{}
 
 func (h *PaymentDLQHandler) Execute(ctx *router.MessageContext) error {
 	// Convert to DLQ message to access metadata
@@ -220,9 +218,9 @@ func (h *PaymentDLQHandler) Execute(ctx *router.MessageContext) error {
 func publishTestEvents(eventBus *rabbitmq.EventBus) {
 	events := []PaymentEvent{
 		{PaymentID: "PAY-001", Amount: 100.00, UserID: "USER-1", ShouldFail: false},
-		{PaymentID: "PAY-002", Amount: 200.00, UserID: "USER-2", ShouldFail: true},  // Will fail
+		{PaymentID: "PAY-002", Amount: 200.00, UserID: "USER-2", ShouldFail: true}, // Will fail
 		{PaymentID: "PAY-003", Amount: 300.00, UserID: "USER-3", ShouldFail: false},
-		{PaymentID: "PAY-004", Amount: 400.00, UserID: "USER-4", ShouldFail: true},  // Will fail
+		{PaymentID: "PAY-004", Amount: 400.00, UserID: "USER-4", ShouldFail: true}, // Will fail
 		{PaymentID: "PAY-005", Amount: 500.00, UserID: "USER-5", ShouldFail: false},
 	}
 

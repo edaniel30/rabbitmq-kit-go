@@ -32,15 +32,15 @@ import (
 
 // EmailEvent represents an email sending event
 type EmailEvent struct {
-	EmailID   string   `json:"email_id"`
-	To        string   `json:"to"`
-	Subject   string   `json:"subject"`
-	Body      string   `json:"body"`
+	EmailID   string    `json:"email_id"`
+	To        string    `json:"to"`
+	Subject   string    `json:"subject"`
+	Body      string    `json:"body"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
-func (e EmailEvent) Type() string      { return "email.send" }
-func (e EmailEvent) Exchange() string  { return "emails.exchange" }
+func (e EmailEvent) Type() string     { return "email.send" }
+func (e EmailEvent) Exchange() string { return "emails.exchange" }
 func (e EmailEvent) ToMap() map[string]any {
 	return map[string]any{
 		"type":      e.Type(),
@@ -62,8 +62,8 @@ func main() {
 	eventBus, err := rabbitmq.NewEventBus(
 		config.DefaultConfig(),
 		config.WithURI(rabbitURI),
-		config.WithMaxRetries(3),  // Retry up to 3 times before giving up
-		config.WithDLQ(true),       // Send to DLQ after max retries
+		config.WithMaxRetries(3), // Retry up to 3 times before giving up
+		config.WithDLQ(true),     // Send to DLQ after max retries
 		config.WithExchanges([]config.ExchangeConfig{
 			{Name: "emails.exchange", Type: "direct", Durable: true},
 		}),
@@ -79,7 +79,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	log.Println("✅ Connected to RabbitMQ with Retry Mechanism")
 	log.Println("   Max Retries: 3")
@@ -116,7 +116,7 @@ func main() {
 	publishTestEmails(eventBus)
 
 	// Wait for processing
-	log.Println("\n⏳ Processing emails (watch retry attempts)...\n")
+	log.Println("\n⏳ Processing emails (watch retry attempts)...")
 	time.Sleep(30 * time.Second)
 
 	// Wait for signal

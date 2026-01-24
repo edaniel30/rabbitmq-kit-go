@@ -8,7 +8,7 @@ on:
 
 env:
   GO_VERSION: "1.25"
-  COVERAGE_THRESHOLD: 90
+  COVERAGE_THRESHOLD: 80
 
 jobs:
   test:

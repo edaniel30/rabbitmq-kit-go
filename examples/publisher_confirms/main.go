@@ -35,8 +35,8 @@ type TransactionEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-func (e TransactionEvent) Type() string      { return "transaction.created" }
-func (e TransactionEvent) Exchange() string  { return "transactions.exchange" }
+func (e TransactionEvent) Type() string     { return "transaction.created" }
+func (e TransactionEvent) Exchange() string { return "transactions.exchange" }
 func (e TransactionEvent) ToMap() map[string]any {
 	return map[string]any{
 		"type":      e.Type(),
@@ -55,7 +55,7 @@ func main() {
 	}
 
 	log.Println("📊 Publisher Confirms Demonstration")
-	log.Println("====================================\n")
+	log.Println("====================================")
 
 	// Example 1: Without publisher confirms (fire and forget)
 	example1WithoutConfirms(rabbitURI)
@@ -89,7 +89,7 @@ func example1WithoutConfirms(rabbitURI string) {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	start := time.Now()
 
@@ -127,8 +127,8 @@ func example2WithConfirms(rabbitURI string) {
 	eventBus, err := rabbitmq.NewEventBus(
 		config.DefaultConfig(),
 		config.WithURI(rabbitURI),
-		config.WithPublisherConfirms(true),           // Enabled
-		config.WithConfirmTimeout(5*time.Second),     // Wait up to 5s for confirm
+		config.WithPublisherConfirms(true),       // Enabled
+		config.WithConfirmTimeout(5*time.Second), // Wait up to 5s for confirm
 		config.WithExchanges([]config.ExchangeConfig{
 			{Name: "transactions.exchange", Type: "direct", Durable: true},
 		}),
@@ -136,7 +136,7 @@ func example2WithConfirms(rabbitURI string) {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	start := time.Now()
 	confirmed := 0
@@ -188,7 +188,7 @@ func example3BatchWithConfirms(rabbitURI string) {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	// Generate 100 transactions
 	events := make([]rabbitmq.Event, 100)

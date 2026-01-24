@@ -87,7 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	log.Println("✅ Connected to RabbitMQ")
 

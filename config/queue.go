@@ -72,12 +72,12 @@ func (q *QueueConfig) WithDLX(dlxExchange, routingKey string) *QueueConfig {
 //	// Returns: QueueConfig{Name: "dlq.orders.queue", Durable: true, ...}
 func CreateDLQQueue(mainQueue QueueConfig, dlqConfig DLQConfig) QueueConfig {
 	return QueueConfig{
-		Name:       dlqConfig.GetDLQName(mainQueue.Name),
-		Exchange:   dlqConfig.ExchangeName,
+		Name:        dlqConfig.GetDLQName(mainQueue.Name),
+		Exchange:    dlqConfig.ExchangeName,
 		RoutingKeys: []string{dlqConfig.GetDLXRoutingKey(mainQueue.Name)},
-		Durable:    dlqConfig.Durable,
-		AutoDelete: dlqConfig.AutoDelete,
-		Exclusive:  false,
-		Args:       nil,
+		Durable:     dlqConfig.Durable,
+		AutoDelete:  dlqConfig.AutoDelete,
+		Exclusive:   false,
+		Args:        nil,
 	}
 }

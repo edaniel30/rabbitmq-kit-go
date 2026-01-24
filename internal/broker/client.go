@@ -65,7 +65,7 @@ func (c *Client) connect() error {
 	// Open channel
 	ch, err := conn.Channel()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return errors.NewConnectionError("open channel", err)
 	}
 
@@ -74,25 +74,25 @@ func (c *Client) connect() error {
 
 	// Setup QoS (prefetch)
 	if err := ch.Qos(c.config.PrefetchCount, 0, false); err != nil {
-		ch.Close()
-		conn.Close()
+		_ = ch.Close()
+		_ = conn.Close()
 		return errors.NewConnectionError("set qos", err)
 	}
 
 	// Enable publisher confirms if configured
 	if c.config.PublisherConfirms {
 		if err := ch.Confirm(false); err != nil {
-			ch.Close()
-			conn.Close()
+			_ = ch.Close()
+			_ = conn.Close()
 			return errors.NewConnectionError("enable publisher confirms", err)
 		}
-		c.config.Logger.Info("Publisher confirms enabled")
+		c.config.Logger.Info(context.Background(), "Publisher confirms enabled", nil)
 	}
 
 	// Setup topology (exchanges, queues, bindings)
 	if err := c.setupTopology(); err != nil {
-		ch.Close()
-		conn.Close()
+		_ = ch.Close()
+		_ = conn.Close()
 		return err
 	}
 
@@ -103,7 +103,7 @@ func (c *Client) connect() error {
 	go func() {
 		err := <-closeErrChan
 		if err != nil && !c.closed {
-			c.config.Logger.Warn("Connection closed: %v", err)
+			c.config.Logger.Warn(context.Background(), "Connection closed unexpectedly", map[string]any{"error": err})
 			c.done <- true
 		}
 	}()
@@ -200,7 +200,13 @@ func (c *Client) setupDLQ() error {
 		return errors.NewTopologyError("declare_dlx", dlqCfg.ExchangeName, err)
 	}
 
-	c.config.Logger.Info("Client: DLX exchange declared [exchange=%s]", dlqCfg.ExchangeName)
+	c.config.Logger.Info(
+		context.Background(),
+		"Client: DLX exchange declared",
+		map[string]any{
+			"exchange": dlqCfg.ExchangeName,
+		},
+	)
 
 	// Create DLQ queue for each configured queue
 	for _, mainQueue := range c.config.Queues {
@@ -232,8 +238,15 @@ func (c *Client) setupDLQ() error {
 			return errors.NewTopologyError("bind_dlq", dlqName, err)
 		}
 
-		c.config.Logger.Info("Client: DLQ configured [queue=%s, dlq=%s, routing_key=%s]",
-			mainQueue.Name, dlqName, routingKey)
+		c.config.Logger.Info(
+			context.Background(),
+			"Client: DLQ configured",
+			map[string]any{
+				"queue":       mainQueue.Name,
+				"dlq":         dlqName,
+				"routing_key": routingKey,
+			},
+		)
 	}
 
 	return nil
@@ -259,17 +272,34 @@ func (c *Client) handleReconnect() {
 		}
 		c.mu.RUnlock()
 
-		c.config.Logger.Info("Attempting to reconnect in %v...", c.config.ReconnectDelay)
+		c.config.Logger.Info(
+			context.Background(),
+			"Attempting to reconnect in %v...",
+			map[string]any{
+				"reconnect_delay": c.config.ReconnectDelay,
+			},
+		)
 		time.Sleep(c.config.ReconnectDelay)
 
 		for {
 			err := c.connect()
 			if err == nil && c.conn != nil && !c.conn.IsClosed() {
-				c.config.Logger.Info("Successfully reconnected")
+				c.config.Logger.Info(
+					context.Background(),
+					"Successfully reconnected",
+					nil,
+				)
 				break
 			}
 
-			c.config.Logger.Error("Reconnection failed: %v. Retrying in %v...", err, c.config.ReconnectDelay)
+			c.config.Logger.Error(
+				context.Background(),
+				"Reconnection failed: %v. Retrying in %v...",
+				map[string]any{
+					"error":           err,
+					"reconnect_delay": c.config.ReconnectDelay,
+				},
+			)
 			time.Sleep(c.config.ReconnectDelay)
 
 			c.mu.RLock()
@@ -316,11 +346,11 @@ func (c *Client) Close() error {
 	c.closed = true
 
 	if c.channel != nil {
-		c.channel.Close()
+		_ = c.channel.Close()
 	}
 
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 
 	return nil

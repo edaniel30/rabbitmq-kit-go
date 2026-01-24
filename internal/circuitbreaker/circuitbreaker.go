@@ -154,6 +154,9 @@ func (cb *CircuitBreaker) RecordSuccess() {
 			cb.successes = 0
 			cb.halfOpenRequests = 0
 		}
+
+	case StateOpen:
+		// Success in open state doesn't affect anything (circuit stays open)
 	}
 }
 
@@ -179,6 +182,9 @@ func (cb *CircuitBreaker) RecordFailure() {
 		cb.setState(StateOpen)
 		cb.halfOpenRequests = 0
 		cb.successes = 0
+
+	case StateOpen:
+		// Already open, failures just accumulate
 	}
 }
 

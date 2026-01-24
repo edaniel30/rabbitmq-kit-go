@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"context"
+	stderrors "errors"
 	"sync"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
@@ -32,7 +34,14 @@ func NewConsumer(client *Client, publisher *Publisher, router *router.Router) *C
 			ResetTimeout:        client.config.CircuitBreakerResetTimeout,
 			HalfOpenMaxRequests: client.config.CircuitBreakerHalfOpenRequests,
 			OnStateChange: func(from, to circuitbreaker.State) {
-				client.config.Logger.Warn("Consumer: Circuit breaker state changed from %s to %s", from, to)
+				client.config.Logger.Warn(
+					context.Background(),
+					"Consumer: Circuit breaker state changed",
+					map[string]any{
+						"from": from,
+						"to":   to,
+					},
+				)
 			},
 		}
 		c.circuitBreaker = circuitbreaker.New(cbConfig)
@@ -103,22 +112,43 @@ func (c *Consumer) Consume(queue string, workers int) error {
 				// Check circuit breaker if enabled
 				if c.circuitBreaker != nil && !c.circuitBreaker.AllowRequest() {
 					metrics := c.circuitBreaker.GetMetrics()
-					c.client.config.Logger.Warn("Consumer Worker %d: Circuit breaker is %s, rejecting message", workerID, metrics.State)
+					c.client.config.Logger.Warn(
+						context.Background(),
+						"Consumer Worker: Circuit breaker is open, rejecting message",
+						map[string]any{
+							"worker_id": workerID,
+							"state":     metrics.State,
+						},
+					)
 					// Nack without requeue - let DLX handle it or discard
-					messageContext.Nack(false)
+					_ = messageContext.Nack(false)
 					continue
 				}
 
 				// Call user handler
 				serviceHandler := c.router.GetHandler(messageContext.GetType())
 				if serviceHandler == nil {
-					c.client.config.Logger.Warn("Consumer Worker %d: No handler found for message type: %s", workerID, messageContext.GetType())
-					messageContext.Ack()
+					c.client.config.Logger.Warn(
+						context.Background(),
+						"Consumer Worker: No handler found for message type",
+						map[string]any{
+							"worker_id": workerID,
+							"type":      messageContext.GetType(),
+						},
+					)
+					_ = messageContext.Ack()
 					continue
 				}
 
 				if err := serviceHandler.Execute(messageContext); err != nil {
-					c.client.config.Logger.Error("Consumer Worker %d: Handler error: %v", workerID, err)
+					c.client.config.Logger.Error(
+						context.Background(),
+						"Consumer Worker: Handler error",
+						map[string]any{
+							"worker_id": workerID,
+							"error":     err,
+						},
+					)
 
 					// Record failure in circuit breaker
 					if c.circuitBreaker != nil {
@@ -130,20 +160,41 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					retryErr := retryHandler.Retry(retryCtx, delivery)
 					cancel()
 
-					if retryErr == errors.ErrMaxRetriesExceeded {
-						c.client.config.Logger.Warn("Consumer Worker %d: Max retries exceeded, sending to DLQ", workerID)
-						messageContext.Nack(false) // Nack without requeue (will go to DLX if configured)
-					} else if retryErr != nil {
-						c.client.config.Logger.Error("Consumer Worker %d: Retry failed: %v, nacking message", workerID, retryErr)
-						messageContext.Nack(false) // Nack without requeue
-					} else {
+					switch {
+					case stderrors.Is(retryErr, errors.ErrMaxRetriesExceeded):
+						c.client.config.Logger.Warn(
+							context.Background(),
+							"Consumer Worker: Max retries exceeded, sending to DLQ",
+							map[string]any{
+								"worker_id": workerID,
+							},
+						)
+						_ = messageContext.Nack(false) // Nack without requeue (will go to DLX if configured)
+					case retryErr != nil:
+						c.client.config.Logger.Error(
+							context.Background(),
+							"Consumer Worker: Retry failed, nacking message",
+							map[string]any{
+								"worker_id": workerID,
+								"error":     retryErr,
+							},
+						)
+						_ = messageContext.Nack(false) // Nack without requeue
+					default:
 						// Successfully requeued, ack the original
-						messageContext.Ack()
+						_ = messageContext.Ack()
 					}
 				} else {
 					// Success, acknowledge message
 					if ackErr := messageContext.Ack(); ackErr != nil {
-						c.client.config.Logger.Error("Consumer Worker %d: Failed to ack message: %v", workerID, ackErr)
+						c.client.config.Logger.Error(
+							context.Background(),
+							"Consumer Worker: Failed to ack message",
+							map[string]any{
+								"worker_id": workerID,
+								"error":     ackErr,
+							},
+						)
 					}
 
 					// Record success in circuit breaker
@@ -191,4 +242,3 @@ func (c *Consumer) ResetCircuitBreaker() bool {
 	c.circuitBreaker.Reset()
 	return true
 }
-

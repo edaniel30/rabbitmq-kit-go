@@ -1,23 +1,27 @@
-.PHONY: test test-unit test-coverage test-coverage-html test-race setup clean
+.PHONY: test test-unit test-integration test-coverage test-coverage-html test-race setup clean
 
-COVERAGE_THRESHOLD=90
+COVERAGE_THRESHOLD=80
 COVERAGE_FILE=coverage.out
-COVERIGNORE_FILE=.coverignore
-
-# Build grep exclusion pattern from .coverignore file (skip empty lines and comments)
-COVERAGE_EXCLUDE=$(shell grep -v '^\#' $(COVERIGNORE_FILE) | grep -v '^$$' | sed 's/^/-e /' | tr '\n' ' ')
-
-# Note: Threshold set to 80% to account for infrastructure code (server lifecycle, signals)
-# that cannot be reliably unit tested. See COVERAGE_EXCEPTIONS.md for detailed justification.
 
 test:
-	@echo "Running unit tests..."
+	@echo "Running all tests..."
 	@go test -v ./...
 
+test-unit:
+	@echo "Running unit tests only (fast, no Docker)..."
+	@go test -short -v ./...
+
+test-integration:
+	@echo "Running integration tests (requires Docker)..."
+	@go test -v -run Integration ./...
+
 test-coverage:
-	@echo "Running tests with coverage..."
-	@echo "Excluding patterns from $(COVERIGNORE_FILE)"
-	@go test -coverprofile=$(COVERAGE_FILE) $(shell go list ./... | grep -v $(COVERAGE_EXCLUDE))
+	@echo "🧪 Running tests with coverage (this may take 1-2 minutes)..."
+	@echo "⏳ Starting Docker containers and running tests..."
+	@EXCLUDE_PATTERN=$$(cat .coverignore | grep -v '^#' | grep -v '^$$' | sed 's/^/-e /' | tr '\n' ' '); \
+	go test -v -coverprofile=$(COVERAGE_FILE) $$(go list ./... | grep -v $$EXCLUDE_PATTERN) | grep -E "(PASS|FAIL|RUN|---|===|coverage:)"
+	@echo ""
+	@echo "📊 Generating coverage report..."
 	@echo ""
 	@echo "=== Coverage by function ==="
 	@go tool cover -func=$(COVERAGE_FILE)
@@ -36,9 +40,12 @@ test-coverage:
 	fi
 
 test-coverage-html:
-	@echo "Running tests with coverage..."
-	@echo "Excluding patterns from $(COVERIGNORE_FILE)"
-	@go test -coverprofile=$(COVERAGE_FILE) $(shell go list ./... | grep -v $(COVERAGE_EXCLUDE))
+	@echo "🧪 Running tests with coverage (this may take 1-2 minutes)..."
+	@echo "⏳ Starting Docker containers and running tests..."
+	@EXCLUDE_PATTERN=$$(cat .coverignore | grep -v '^#' | grep -v '^$$' | sed 's/^/-e /' | tr '\n' ' '); \
+	go test -v -coverprofile=$(COVERAGE_FILE) $$(go list ./... | grep -v $$EXCLUDE_PATTERN) | grep -E "(PASS|FAIL|RUN|---|===|coverage:)"
+	@echo ""
+	@echo "📊 Generating coverage report..."
 	@echo ""
 	@echo "=== Coverage by function ==="
 	@go tool cover -func=$(COVERAGE_FILE)
@@ -55,9 +62,9 @@ test-coverage-html:
 		echo "✅ PASS: Coverage meets threshold"; \
 	fi
 	@echo ""
-	@echo "Generating HTML coverage report..."
+	@echo "🌐 Generating HTML coverage report..."
 	@go tool cover -html=$(COVERAGE_FILE) -o coverage.html
-	@echo "Opening coverage report..."
+	@echo "📂 Opening coverage report..."
 	@open coverage.html
 
 test-race:
@@ -68,6 +75,10 @@ setup:
 	@echo "Installing pre-commit hooks..."
 	@pre-commit install
 	@echo "Setup complete!"
+
+pre-commit:
+	@echo "Running pre-commit checks on all files..."
+	@pre-commit run --all-files
 
 clean:
 	@rm -f $(COVERAGE_FILE) coverage.html

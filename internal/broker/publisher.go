@@ -72,7 +72,11 @@ func (p *Publisher) setupConfirms() {
 	// Start confirmation processor
 	go p.processConfirmations()
 
-	p.client.config.Logger.Info("Publisher: High-performance confirms enabled")
+	p.client.config.Logger.Info(
+		context.Background(),
+		"Publisher: High-performance confirms enabled",
+		nil,
+	)
 }
 
 // ensureConfirmsSetup checks if confirms are setup for the current channel.
@@ -136,7 +140,11 @@ func (p *Publisher) ensureConfirmsSetup() {
 			p.mu.Unlock()
 
 			go p.processConfirmations()
-			p.client.config.Logger.Info("Publisher: Confirms re-initialized after reconnection")
+			p.client.config.Logger.Info(
+				context.Background(),
+				"Publisher: Confirms re-initialized after reconnection",
+				nil,
+			)
 		}
 		p.client.mu.RUnlock()
 	}
@@ -167,7 +175,13 @@ func (p *Publisher) processConfirmations() {
 				close(resultChan)
 				delete(p.pending, confirmation.DeliveryTag)
 			} else {
-				p.client.config.Logger.Warn("Publisher: Received unexpected confirmation for delivery tag %d", confirmation.DeliveryTag)
+				p.client.config.Logger.Warn(
+					context.Background(),
+					"Publisher: Received unexpected confirmation for delivery tag",
+					map[string]any{
+						"delivery_tag": confirmation.DeliveryTag,
+					},
+				)
 			}
 			p.mu.Unlock()
 
@@ -310,13 +324,28 @@ func (p *Publisher) PublishWithOptions(ctx context.Context, exchange, routingKey
 		case ack, ok := <-resultChan:
 			if !ok {
 				// Channel closed by confirmation processor (connection lost)
-				p.client.config.Logger.Warn("Publisher: Confirmation channel closed [exchange=%s, routing_key=%s]", exchange, routingKey)
+				p.client.config.Logger.Warn(
+					context.Background(),
+					"Publisher: Confirmation channel closed",
+					map[string]any{
+						"exchange":    exchange,
+						"routing_key": routingKey,
+					},
+				)
 				return errors.ErrPublishConfirmTimeout
 			}
 
 			if !ack {
 				// NACK received from RabbitMQ
-				p.client.config.Logger.Error("Publisher: Message not confirmed (NACK) [exchange=%s, routing_key=%s, delivery_tag=%d]", exchange, routingKey, deliveryTag)
+				p.client.config.Logger.Error(
+					context.Background(),
+					"Publisher: Message not confirmed (NACK)",
+					map[string]any{
+						"exchange":     exchange,
+						"routing_key":  routingKey,
+						"delivery_tag": deliveryTag,
+					},
+				)
 				return errors.ErrPublishNotConfirmed
 			}
 
@@ -325,7 +354,16 @@ func (p *Publisher) PublishWithOptions(ctx context.Context, exchange, routingKey
 			return nil
 
 		case <-time.After(confirmTimeout):
-			p.client.config.Logger.Error("Publisher: Confirmation timeout [exchange=%s, routing_key=%s, delivery_tag=%d, timeout=%v]", exchange, routingKey, deliveryTag, confirmTimeout)
+			p.client.config.Logger.Error(
+				context.Background(),
+				"Publisher: Confirmation timeout",
+				map[string]any{
+					"exchange":     exchange,
+					"routing_key":  routingKey,
+					"delivery_tag": deliveryTag,
+					"timeout":      confirmTimeout,
+				},
+			)
 			return errors.ErrPublishConfirmTimeout
 
 		case <-ctx.Done():

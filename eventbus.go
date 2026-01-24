@@ -9,6 +9,7 @@ import (
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/broker"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/circuitbreaker"
+	"github.com/edaniel30/rabbitmq-kit-go/internal/logger"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -78,6 +79,11 @@ func NewEventBus(cfg config.Config, opts ...config.Option) (*EventBus, error) {
 	// Apply functional options
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+
+	// Set default logger if not provided
+	if cfg.Logger == nil {
+		cfg.Logger = logger.New()
 	}
 
 	// Validate configuration
@@ -697,13 +703,13 @@ func (b *EventBus) RequeueAllFromDLQ(ctx context.Context, dlqName string, resetR
 		// Check if we've reached the limit
 		if maxMessages > 0 && requeuedCount >= maxMessages {
 			// Nack remaining message to keep it in DLQ
-			delivery.Nack(false, true)
+			_ = delivery.Nack(false, true)
 			break
 		}
 
 		// Check context cancellation
 		if ctx.Err() != nil {
-			delivery.Nack(false, true)
+			_ = delivery.Nack(false, true)
 			return requeuedCount, ctx.Err()
 		}
 
@@ -716,15 +722,12 @@ func (b *EventBus) RequeueAllFromDLQ(ctx context.Context, dlqName string, resetR
 		if err != nil {
 			// Log error - can't access logger directly, continue silently
 			// Nack and requeue in DLQ
-			delivery.Nack(false, true)
+			_ = delivery.Nack(false, true)
 			continue
 		}
 
 		// Successfully requeued, ack the DLQ message
-		err = delivery.Ack(false)
-		if err != nil {
-			// Log error - can't access logger directly, continue silently
-		}
+		_ = delivery.Ack(false) // Ignore error - can't access logger directly
 
 		requeuedCount++
 

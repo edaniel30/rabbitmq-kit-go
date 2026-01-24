@@ -5,3 +5,9 @@
 # Examples - Example applications are not part of the library's testable code
 /examples
 
+# Testing helpers - Test infrastructure
+/testing
+
+# Mock implementations for testing
+/internal/mocks
+

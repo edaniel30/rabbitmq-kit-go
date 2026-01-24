@@ -1,12 +1,24 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/logger"
 )
+
+// Logger is the interface that any logger implementation must satisfy.
+// This is re-declared here to avoid import cycles with the rabbitmq package.
+// The actual public interface is defined in the rabbitmq package root.
+type Logger interface {
+	Info(ctx context.Context, msg string, fields map[string]any)
+	Error(ctx context.Context, msg string, fields map[string]any)
+	Warn(ctx context.Context, msg string, fields map[string]any)
+	Debug(ctx context.Context, msg string, fields map[string]any)
+	Close() error
+}
 
 // Config holds the configuration for the RabbitMQ client.
 type Config struct {
@@ -20,7 +32,7 @@ type Config struct {
 	MaxRetries        int           // Maximum number of retries for failed messages (default: 3)
 	PublisherConfirms bool          // Enable publisher confirms for guaranteed delivery (default: false)
 	ConfirmTimeout    time.Duration // Timeout for waiting publisher confirms (default: 5s)
-	Logger            logger.Logger // Logger for internal logging (default: DefaultLogger)
+	Logger            Logger        // Logger for internal logging (default: DefaultLogger)
 
 	// Circuit Breaker configuration
 	CircuitBreakerEnabled          bool          // Enable circuit breaker for consumers (default: false)
@@ -47,20 +59,22 @@ type Option func(*Config)
 //   - Timeout: 10 seconds
 //   - PrefetchCount: 10
 //   - MaxRetries: 3
-//   - Logger: DefaultLogger
+//   - Logger: nil (will be set to DefaultLogger if not provided)
 //   - CircuitBreakerEnabled: false
 //   - CircuitBreakerMaxFailures: 5
 //   - CircuitBreakerResetTimeout: 60 seconds
 //   - CircuitBreakerHalfOpenRequests: 3
 //   - Exchanges: empty
 //   - Queues: empty
+//
+// Note: If Logger is nil, the broker will automatically use NewDefaultLogger().
 func DefaultConfig() Config {
 	return Config{
 		ReconnectDelay:                 5 * time.Second,
 		Timeout:                        10 * time.Second,
 		PrefetchCount:                  10,
 		MaxRetries:                     3,
-		Logger:                         logger.NewDefaultLogger(),
+		Logger:                         logger.New(), // Will be set to DefaultLogger in broker.New() if nil
 		CircuitBreakerEnabled:          false,
 		CircuitBreakerMaxFailures:      5,
 		CircuitBreakerResetTimeout:     60 * time.Second,
@@ -228,25 +242,19 @@ func WithConfirmTimeout(timeout time.Duration) Option {
 //
 //	type MyLogger struct{}
 //
-//	func (l *MyLogger) Info(msg string, args ...any) {
+//	func (l *MyLogger) Info(ctx context.Context, msg string, fields map[string]any) {
 //	    // Your logging implementation
 //	}
 //	// ... implement other methods
 //
-//	eventBus, _ := rabbitmq.NewEventBus(
+//	client, _ := broker.New(
 //	    config.DefaultConfig(),
 //	    config.WithLogger(&MyLogger{}),
 //	)
 //
-// To disable logging completely, use NoopLogger:
-//
-//	eventBus, _ := rabbitmq.NewEventBus(
-//	    config.DefaultConfig(),
-//	    config.WithLogger(&logger.NoopLogger{}),
-//	)
-//
-// Default: DefaultLogger (writes to stderr with timestamps)
-func WithLogger(log logger.Logger) Option {
+// Default: DefaultLogger (writes to stdout with timestamps)
+// Use rabbitmq.NewDefaultLogger() to create the default logger.
+func WithLogger(log Logger) Option {
 	return func(c *Config) {
 		c.Logger = log
 	}

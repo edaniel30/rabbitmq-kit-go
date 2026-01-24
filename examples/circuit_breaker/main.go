@@ -37,8 +37,8 @@ type HealthCheckEvent struct {
 	ShouldFail  bool      `json:"should_fail"` // Explicit flag to control failure
 }
 
-func (e HealthCheckEvent) Type() string      { return "health.check" }
-func (e HealthCheckEvent) Exchange() string  { return "health.exchange" }
+func (e HealthCheckEvent) Type() string     { return "health.check" }
+func (e HealthCheckEvent) Exchange() string { return "health.exchange" }
 func (e HealthCheckEvent) ToMap() map[string]any {
 	return map[string]any{
 		"type":         e.Type(),
@@ -59,11 +59,11 @@ func main() {
 	eventBus, err := rabbitmq.NewEventBus(
 		config.DefaultConfig(),
 		config.WithURI(rabbitURI),
-		config.WithCircuitBreaker(true),                        // Enable circuit breaker
-		config.WithCircuitBreakerMaxFailures(5),                // Open after 5 failures
-		config.WithCircuitBreakerResetTimeout(10*time.Second),  // Try half-open after 10s
-		config.WithCircuitBreakerHalfOpenRequests(3),           // Allow 3 requests in half-open
-		config.WithMaxRetries(0),                               // Don't retry (to avoid old messages in queue)
+		config.WithCircuitBreaker(true),                       // Enable circuit breaker
+		config.WithCircuitBreakerMaxFailures(5),               // Open after 5 failures
+		config.WithCircuitBreakerResetTimeout(10*time.Second), // Try half-open after 10s
+		config.WithCircuitBreakerHalfOpenRequests(3),          // Allow 3 requests in half-open
+		config.WithMaxRetries(0),                              // Don't retry (to avoid old messages in queue)
 		config.WithExchanges([]config.ExchangeConfig{
 			{Name: "health.exchange", Type: "direct", Durable: true},
 		}),
@@ -79,7 +79,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create EventBus: %v", err)
 	}
-	defer eventBus.Close()
+	defer func() { _ = eventBus.Close() }()
 
 	log.Println("✅ Connected to RabbitMQ with Circuit Breaker")
 	log.Println("   Max Failures: 5")
