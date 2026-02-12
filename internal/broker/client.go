@@ -200,13 +200,9 @@ func (c *Client) setupDLQ() error {
 		return errors.NewTopologyError("declare_dlx", dlqCfg.ExchangeName, err)
 	}
 
-	c.config.Logger.Info(
-		context.Background(),
-		"Client: DLX exchange declared",
-		map[string]any{
-			"exchange": dlqCfg.ExchangeName,
-		},
-	)
+	c.config.Logger.Debug(context.Background(), "Client: DLX exchange declared", map[string]any{
+		"exchange": dlqCfg.ExchangeName,
+	})
 
 	// Create DLQ queue for each configured queue
 	for _, mainQueue := range c.config.Queues {
@@ -238,15 +234,11 @@ func (c *Client) setupDLQ() error {
 			return errors.NewTopologyError("bind_dlq", dlqName, err)
 		}
 
-		c.config.Logger.Info(
-			context.Background(),
-			"Client: DLQ configured",
-			map[string]any{
-				"queue":       mainQueue.Name,
-				"dlq":         dlqName,
-				"routing_key": routingKey,
-			},
-		)
+		c.config.Logger.Debug(context.Background(), "Client: DLQ configured", map[string]any{
+			"queue":       mainQueue.Name,
+			"dlq":         dlqName,
+			"routing_key": routingKey,
+		})
 	}
 
 	return nil
