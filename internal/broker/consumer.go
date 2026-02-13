@@ -128,7 +128,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 				// Call user handler
 				serviceHandler := c.router.GetHandler(messageContext.GetType())
 				if serviceHandler == nil {
-					c.client.config.Logger.Warn(
+					c.client.config.Logger.Error(
 						context.Background(),
 						"Consumer Worker: No handler found for message type",
 						map[string]any{
