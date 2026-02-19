@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// --- Test helpers ---
+
 // mockHandler implements HandlerService for testing
 type mockHandler struct {
 	executed bool
@@ -17,38 +19,31 @@ func (h *mockHandler) Execute(ctx *MessageContext) error {
 	return nil
 }
 
-func TestRouter(t *testing.T) {
-	t.Run("NewRouter creates empty router", func(t *testing.T) {
+// --- NewRouter ---
+
+func TestNewRouter(t *testing.T) {
+	t.Run("creates router with empty handlers map", func(t *testing.T) {
 		r := NewRouter()
 
 		require.NotNil(t, r)
 		assert.NotNil(t, r.handlers)
 		assert.Empty(t, r.handlers)
 	})
+}
 
-	t.Run("Handle registers handler and GetHandler retrieves it", func(t *testing.T) {
+// --- Handle ---
+
+func TestHandle(t *testing.T) {
+	t.Run("registers handler for event type", func(t *testing.T) {
 		r := NewRouter()
 		handler := &mockHandler{}
 
-		// Register handler
 		r.Handle("user.created", handler)
 
-		// Retrieve handler
-		retrieved := r.GetHandler("user.created")
-		require.NotNil(t, retrieved)
-
-		// Verify handler exists
 		assert.NotNil(t, r.handlers["user.created"])
 	})
 
-	t.Run("GetHandler returns nil for unregistered event", func(t *testing.T) {
-		r := NewRouter()
-
-		handler := r.GetHandler("non.existent")
-		assert.Nil(t, handler)
-	})
-
-	t.Run("Handle overwrites existing handler", func(t *testing.T) {
+	t.Run("overwrites existing handler for same event type", func(t *testing.T) {
 		r := NewRouter()
 		handler1 := &mockHandler{}
 		handler2 := &mockHandler{}
@@ -56,12 +51,11 @@ func TestRouter(t *testing.T) {
 		r.Handle("event.type", handler1)
 		r.Handle("event.type", handler2)
 
-		// Should only have one handler
 		assert.Len(t, r.handlers, 1)
 		assert.Equal(t, handler2, r.GetHandler("event.type"))
 	})
 
-	t.Run("multiple handlers for different events", func(t *testing.T) {
+	t.Run("registers multiple handlers for different event types", func(t *testing.T) {
 		r := NewRouter()
 
 		r.Handle("user.created", &mockHandler{})
@@ -69,9 +63,25 @@ func TestRouter(t *testing.T) {
 		r.Handle("order.created", &mockHandler{})
 
 		assert.Len(t, r.handlers, 3)
-		assert.NotNil(t, r.GetHandler("user.created"))
-		assert.NotNil(t, r.GetHandler("user.updated"))
-		assert.NotNil(t, r.GetHandler("order.created"))
+	})
+}
+
+// --- GetHandler ---
+
+func TestGetHandler(t *testing.T) {
+	t.Run("returns registered handler", func(t *testing.T) {
+		r := NewRouter()
+		handler := &mockHandler{}
+
+		r.Handle("user.created", handler)
+
+		retrieved := r.GetHandler("user.created")
+		require.NotNil(t, retrieved)
+	})
+
+	t.Run("returns nil for unregistered event type", func(t *testing.T) {
+		r := NewRouter()
+
 		assert.Nil(t, r.GetHandler("non.existent"))
 	})
 }

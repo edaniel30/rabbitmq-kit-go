@@ -87,8 +87,6 @@ func main() {
 }
 ```
 
-For complete examples, see [examples/](examples/).
-
 ## Documentation
 
 ### 📖 [Configuration Guide](docs/CONFIGURATION.md)
@@ -115,8 +113,9 @@ type UserCreatedEvent struct {
     Email  string `json:"email"`
 }
 
-func (e *UserCreatedEvent) Type() string      { return "user.created" }
-func (e *UserCreatedEvent) Exchange() string  { return "users.exchange" }
+func (e *UserCreatedEvent) Type() string             { return "user.created" }
+func (e *UserCreatedEvent) Exchange() string         { return "users.exchange" }
+func (e *UserCreatedEvent) Headers() map[string]any  { return nil } // or custom headers
 func (e *UserCreatedEvent) ToMap() map[string]any {
     return map[string]any{
         "type":    e.Type(),
@@ -125,6 +124,8 @@ func (e *UserCreatedEvent) ToMap() map[string]any {
     }
 }
 ```
+
+A `trace_id` header is automatically injected on publish if not already present in `Headers()`. When consuming, retrieve it with `ctx.GetTraceID()`.
 
 ### Handler Return Values
 
@@ -178,12 +179,12 @@ result, err := eventBus.PublishBatch(ctx, events,
 )
 ```
 
-### Async Batch with Worker Pool
+### Sequential Batch
 
 ```go
-// Concurrent publishing with limited workers
-result, err := eventBus.PublishBatchAsync(ctx, events,
-    config.WithMaxConcurrency(50),
+// Sequential: publish one by one (legacy mode)
+result, err := eventBus.PublishBatch(ctx, events,
+    config.WithPipelining(false),
 )
 ```
 

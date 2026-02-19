@@ -199,38 +199,7 @@ func (p *Publisher) Close() {
 	}
 }
 
-// createDefaultPublishing creates a standard AMQP Publishing message with default settings.
-//
-// Default settings:
-//   - ContentType: "application/json"
-//   - DeliveryMode: Persistent
-//   - Timestamp: Current time
-func createDefaultPublishing(body []byte) amqp.Publishing {
-	return amqp.Publishing{
-		ContentType:  "application/json",
-		Body:         body,
-		DeliveryMode: amqp.Persistent,
-		Timestamp:    time.Now(),
-	}
-}
-
-// Publish publishes a message to the specified exchange with a routing key.
-//
-// The message body is sent with content type "application/json" and
-// persistent delivery mode.
-//
-// If PublisherConfirms is enabled in the config, this method will wait for
-// confirmation from RabbitMQ before returning.
-//
-// Example:
-//
-//	ctx := context.Background()
-//	err := client.Publish(ctx, "my.exchange", "routing.key", []byte(`{"foo":"bar"}`))
-func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, body []byte) error {
-	return p.PublishWithOptions(ctx, exchange, routingKey, createDefaultPublishing(body))
-}
-
-// PublishWithOptions publishes a message with custom publishing options.
+// Publish publishes a message with custom publishing options.
 //
 // This allows full control over message properties like headers, priority,
 // content type, etc.
@@ -247,7 +216,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 //
 // Example:
 //
-//	err := client.PublishWithOptions(ctx, "exchange", "key", amqp.Publishing{
+//	err := client.Publish(ctx, "exchange", "key", amqp.Publishing{
 //	    ContentType:  "application/json",
 //	    Body:         []byte(`{"data":"value"}`),
 //	    DeliveryMode: amqp.Persistent,
@@ -256,7 +225,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 //	        "x-retry-count": 0,
 //	    },
 //	})
-func (p *Publisher) PublishWithOptions(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) error {
+func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) error {
 	// Ensure confirms are setup (handles reconnection)
 	p.ensureConfirmsSetup()
 
@@ -378,7 +347,7 @@ func (p *Publisher) PublishWithOptions(ctx context.Context, exchange, routingKey
 type PublishMessage struct {
 	Exchange   string
 	RoutingKey string
-	Body       []byte
+	Message    amqp.Publishing
 }
 
 // PublishBatchPipeline publishes multiple messages using pipelining for maximum throughput.
@@ -447,7 +416,7 @@ func (p *Publisher) PublishBatchPipeline(ctx context.Context, messages []Publish
 				msg.RoutingKey,
 				false, // mandatory
 				false, // immediate
-				createDefaultPublishing(msg.Body),
+				msg.Message,
 			)
 			p.client.mu.RUnlock()
 
@@ -484,7 +453,7 @@ func (p *Publisher) PublishBatchPipeline(ctx context.Context, messages []Publish
 			msg.RoutingKey,
 			false, // mandatory
 			false, // immediate
-			createDefaultPublishing(msg.Body),
+			msg.Message,
 		)
 		p.client.mu.RUnlock()
 

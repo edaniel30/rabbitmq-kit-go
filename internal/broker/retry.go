@@ -85,5 +85,5 @@ func (h *Handler) Retry(ctx context.Context, delivery amqp.Delivery) error {
 		UserId:        delivery.UserId,
 	}
 
-	return h.publisher.PublishWithOptions(ctx, delivery.Exchange, delivery.RoutingKey, msg)
+	return h.publisher.Publish(ctx, delivery.Exchange, delivery.RoutingKey, msg)
 }

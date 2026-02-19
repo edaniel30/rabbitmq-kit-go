@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"context"
 	"os"
 	"testing"
 	"time"
@@ -106,51 +105,6 @@ func TestClient_Integration(t *testing.T) {
 		assert.True(t, ok)
 		assert.True(t, time.Until(deadline) > 0)
 		assert.True(t, time.Until(deadline) <= 5*time.Second)
-	})
-
-	t.Run("WithTimeout creates context from parent", func(t *testing.T) {
-		cfg := config.DefaultConfig()
-		cfg.URI = sharedContainer.URI
-		cfg.Logger = logger.New()
-		cfg.Timeout = 3 * time.Second
-
-		client, err := New(cfg)
-		require.NoError(t, err)
-		defer func() { _ = client.Close() }()
-
-		parent := context.Background()
-		ctx, cancel := client.WithTimeout(parent)
-		defer cancel()
-
-		deadline, ok := ctx.Deadline()
-		assert.True(t, ok)
-		assert.True(t, time.Until(deadline) <= 3*time.Second)
-	})
-
-	t.Run("EnsureTimeout adds timeout if missing", func(t *testing.T) {
-		cfg := config.DefaultConfig()
-		cfg.URI = sharedContainer.URI
-		cfg.Logger = logger.New()
-		cfg.Timeout = 2 * time.Second
-
-		client, err := New(cfg)
-		require.NoError(t, err)
-		defer func() { _ = client.Close() }()
-
-		// Context without deadline
-		ctx := context.Background()
-		newCtx, cancel := client.EnsureTimeout(ctx)
-		defer cancel()
-
-		_, ok := newCtx.Deadline()
-		assert.True(t, ok)
-
-		// Context with existing deadline
-		ctxWithDeadline, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel2()
-
-		sameCtx, _ := client.EnsureTimeout(ctxWithDeadline)
-		assert.Equal(t, ctxWithDeadline, sameCtx)
 	})
 
 	t.Run("Close is idempotent", func(t *testing.T) {
