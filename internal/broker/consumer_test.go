@@ -9,6 +9,7 @@ import (
 	"github.com/edaniel30/rabbitmq-kit-go/config"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/logger"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +88,10 @@ func TestConsumer_Integration(t *testing.T) {
 
 		// Publish a message
 		msg := `{"type":"test.event","message":"hello consumer"}`
-		err := publisher.Publish(context.Background(), "test.exchange", "test.event", []byte(msg))
+		err := publisher.Publish(context.Background(), "test.exchange", "test.event", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(msg),
+		})
 		require.NoError(t, err)
 
 		// Wait for processing
@@ -113,7 +117,10 @@ func TestConsumer_Integration(t *testing.T) {
 		// Publish multiple messages
 		for i := 0; i < 5; i++ {
 			msg := `{"type":"test.multi","message":"msg"}`
-			_ = publisher.Publish(context.Background(), "test.exchange", "test.multi", []byte(msg))
+			_ = publisher.Publish(context.Background(), "test.exchange", "test.multi", amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(msg),
+			})
 		}
 
 		time.Sleep(200 * time.Millisecond)
@@ -174,7 +181,10 @@ func TestConsumer_Integration(t *testing.T) {
 		// Publish messages that will fail
 		for i := 0; i < 3; i++ {
 			msg := `{"type":"cb.event","message":"fail"}`
-			_ = publisher.Publish(context.Background(), "test.exchange", "cb.fail", []byte(msg))
+			_ = publisher.Publish(context.Background(), "test.exchange", "cb.fail", amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(msg),
+			})
 			time.Sleep(100 * time.Millisecond)
 		}
 

@@ -337,7 +337,3 @@ if !dlqMsg.ShouldRetry(maxRetries) {
     return nil // Stop requeuing
 }
 ```
-
-## Complete Example
-
-See [examples/dlq/](../examples/dlq/) for a working example with monitoring and requeuing.

@@ -83,6 +83,13 @@ func TestConfigOptions(t *testing.T) {
 			},
 		},
 		{
+			name:   "WithLogger",
+			option: WithLogger(DefaultConfig().Logger),
+			validate: func(t *testing.T, cfg Config) {
+				assert.NotNil(t, cfg.Logger)
+			},
+		},
+		{
 			name:   "WithCircuitBreaker",
 			option: WithCircuitBreaker(true),
 			validate: func(t *testing.T, cfg Config) {

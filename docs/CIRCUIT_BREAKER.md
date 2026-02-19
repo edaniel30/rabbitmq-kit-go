@@ -241,7 +241,3 @@ Use when: General production workloads.
 - Requires consistent failure patterns to be effective
 - Works best with **consistent failure modes** (e.g., database down, API unreachable)
 - May not help with **intermittent failures** or **poison messages**
-
-## Complete Example
-
-See [examples/circuit_breaker/](../examples/circuit_breaker/) for a working example.

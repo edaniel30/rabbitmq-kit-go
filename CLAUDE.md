@@ -17,9 +17,6 @@ Production-ready RabbitMQ library for Go providing high-level abstractions for e
 export RABBITMQ_URI="amqp://guest:guest@localhost:5672/"
 docker run -d --name rabbitmq -p 5672:5672 rabbitmq:3.13-management-alpine
 
-# Run examples
-go run examples/basic/main.go
-
 # Tests
 make test-unit          # Fast, no Docker
 make test               # All tests, requires Docker
@@ -40,13 +37,12 @@ rabbitmq-kit-go/
 │   └── logger/         # Logging abstraction
 ├── router/              # Message routing by event type
 ├── testing/             # Test helpers (testcontainers)
-├── examples/            # Working examples
 ├── docs/                # Detailed documentation
 │   ├── CONFIGURATION.md
 │   ├── CIRCUIT_BREAKER.md
 │   ├── DLQ.md
 │   └── BATCH_PUBLISHING.md
-├── event.go            # Event interface & BaseEvent
+├── event.go            # Event interface & createDefaultPublishing
 ├── eventbus.go         # EventBus - main public API
 └── logger.go           # Logger interface
 ```
@@ -55,7 +51,7 @@ rabbitmq-kit-go/
 
 | Package | Responsibility | Visibility |
 |---------|---------------|-----------|
-| **Root** | EventBus, Event, BaseEvent | Public |
+| **Root** | EventBus, Event | Public |
 | `config` | Configuration types & options | Public |
 | `errors` | Custom/sentinel errors | Public |
 | `router` | Event routing & message context | Public |
@@ -285,7 +281,8 @@ make setup  # Install once
 ### Event Routing
 - Events MUST have `"type"` field in JSON for routing
 - Event type = routing key
-- Use `BaseEvent` for common fields (id, occurred_at, type)
+- `trace_id` is automatically injected on publish if not present in `Headers()`
+- Retrieve with `ctx.GetTraceID()` in handlers
 
 ### Retry Behavior
 - Max retries default: 3
@@ -340,11 +337,11 @@ eventBus.StartConsume("queue", runtime.NumCPU() * 3)
 ### Batch Publishing
 
 ```go
-// Pipelined: 5-10x faster
+// Pipelined: 5-10x faster (default)
 eventBus.PublishBatch(ctx, events, config.WithPipelining(true))
 
-// Async: Fastest for 1000+ events
-eventBus.PublishBatchAsync(ctx, events, config.WithMaxConcurrency(50))
+// Sequential: publish one by one
+eventBus.PublishBatch(ctx, events, config.WithPipelining(false))
 ```
 
 See: `docs/BATCH_PUBLISHING.md`
@@ -460,14 +457,17 @@ func WithNewFeature(enabled bool) Option {
 
 ```go
 type OrderCompletedEvent struct {
-    *rabbitmq.BaseEvent
     OrderID string
 }
 
+func (e *OrderCompletedEvent) Type() string            { return "order.completed" }
+func (e *OrderCompletedEvent) Exchange() string        { return "orders.exchange" }
+func (e *OrderCompletedEvent) Headers() map[string]any { return nil }
 func (e *OrderCompletedEvent) ToMap() map[string]any {
-    m := e.BaseEvent.ToMap()
-    m["order_id"] = e.OrderID
-    return m
+    return map[string]any{
+        "type":     e.Type(),
+        "order_id": e.OrderID,
+    }
 }
 ```
 

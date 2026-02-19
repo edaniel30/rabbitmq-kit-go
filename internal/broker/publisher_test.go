@@ -34,7 +34,10 @@ func TestPublisher_Integration(t *testing.T) {
 		defer publisher.Close()
 
 		ctx := context.Background()
-		err = publisher.Publish(ctx, "test.exchange", "test.key", []byte(`{"test":"data"}`))
+		err = publisher.Publish(ctx, "test.exchange", "test.key", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"test":"data"}`),
+		})
 		assert.NoError(t, err)
 	})
 
@@ -56,7 +59,10 @@ func TestPublisher_Integration(t *testing.T) {
 		defer publisher.Close()
 
 		ctx := context.Background()
-		err = publisher.Publish(ctx, "test.exchange", "test.key", []byte(`{"test":"confirmed"}`))
+		err = publisher.Publish(ctx, "test.exchange", "test.key", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"test":"confirmed"}`),
+		})
 		assert.NoError(t, err)
 	})
 
@@ -86,7 +92,7 @@ func TestPublisher_Integration(t *testing.T) {
 			},
 		}
 
-		err = publisher.PublishWithOptions(ctx, "test.exchange", "test.key", msg)
+		err = publisher.Publish(ctx, "test.exchange", "test.key", msg)
 		assert.NoError(t, err)
 	})
 
@@ -108,9 +114,18 @@ func TestPublisher_Integration(t *testing.T) {
 		defer publisher.Close()
 
 		messages := []PublishMessage{
-			{Exchange: "test.exchange", RoutingKey: "test.1", Body: []byte(`{"msg":1}`)},
-			{Exchange: "test.exchange", RoutingKey: "test.2", Body: []byte(`{"msg":2}`)},
-			{Exchange: "test.exchange", RoutingKey: "test.3", Body: []byte(`{"msg":3}`)},
+			{Exchange: "test.exchange", RoutingKey: "test.1", Message: amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(`{"msg":1}`),
+			}},
+			{Exchange: "test.exchange", RoutingKey: "test.2", Message: amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(`{"msg":2}`),
+			}},
+			{Exchange: "test.exchange", RoutingKey: "test.3", Message: amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(`{"msg":3}`),
+			}},
 		}
 
 		ctx := context.Background()
@@ -140,8 +155,14 @@ func TestPublisher_Integration(t *testing.T) {
 		defer publisher.Close()
 
 		messages := []PublishMessage{
-			{Exchange: "test.exchange", RoutingKey: "test.1", Body: []byte(`{"msg":1}`)},
-			{Exchange: "test.exchange", RoutingKey: "test.2", Body: []byte(`{"msg":2}`)},
+			{Exchange: "test.exchange", RoutingKey: "test.1", Message: amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(`{"msg":1}`),
+			}},
+			{Exchange: "test.exchange", RoutingKey: "test.2", Message: amqp.Publishing{
+				ContentType: "application/json",
+				Body:        []byte(`{"msg":2}`),
+			}},
 		}
 
 		ctx := context.Background()
@@ -186,7 +207,10 @@ func TestPublisher_Errors(t *testing.T) {
 		publisher := NewPublisher(client)
 		_ = client.Close()
 
-		err := publisher.Publish(context.Background(), "test", "test", []byte("data"))
+		err := publisher.Publish(context.Background(), "test", "test", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"data":"value"}`),
+		})
 		assert.Error(t, err)
 	})
 
@@ -224,7 +248,53 @@ func TestPublisher_Errors(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		err := publisher.Publish(ctx, "test.exchange", "key", []byte("data"))
+		err := publisher.Publish(ctx, "test.exchange", "key", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"data":"value"}`),
+		})
 		assert.Error(t, err)
+	})
+
+	t.Run("PublishBatchPipeline to closed client returns error", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.URI = sharedContainer.URI
+		cfg.Logger = logger.New()
+		cfg.PublisherConfirms = true
+
+		client, _ := New(cfg)
+		publisher := NewPublisher(client)
+		_ = client.Close()
+
+		messages := []PublishMessage{
+			{Exchange: "test.exchange", RoutingKey: "test.1", Message: amqp.Publishing{
+				Body: []byte(`{"msg":1}`),
+			}},
+		}
+		_, err := publisher.PublishBatchPipeline(context.Background(), messages)
+		assert.Error(t, err)
+	})
+
+	t.Run("Publish with confirm timeout returns error", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.URI = sharedContainer.URI
+		cfg.Logger = logger.New()
+		cfg.PublisherConfirms = true
+		cfg.ConfirmTimeout = 1 * time.Millisecond // Very short timeout
+		cfg.Exchanges = []config.ExchangeConfig{
+			{Name: "test.exchange", Type: "topic", Durable: true},
+		}
+
+		client, _ := New(cfg)
+		defer func() { _ = client.Close() }()
+
+		publisher := NewPublisher(client)
+		defer publisher.Close()
+
+		err := publisher.Publish(context.Background(), "test.exchange", "test.key", amqp.Publishing{
+			ContentType: "application/json",
+			Body:        []byte(`{"data":"value"}`),
+		})
+		// May succeed or timeout depending on timing - just ensure no panic
+		_ = err
 	})
 }

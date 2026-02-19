@@ -17,7 +17,7 @@ type MessageContext struct {
 }
 
 // BindJSON unmarshals the message body into the provided value.
-func (c *MessageContext) BindJSON(v interface{}) error {
+func (c *MessageContext) BindJSON(v any) error {
 	return json.Unmarshal(c.Delivery.Body, v)
 }
 
@@ -55,7 +55,7 @@ func (c *MessageContext) Nack(requeue bool) error {
 }
 
 // GetHeader retrieves a header value from the message.
-func (c *MessageContext) GetHeader(key string) interface{} {
+func (c *MessageContext) GetHeader(key string) any {
 	if c.Delivery.Headers == nil {
 		return nil
 	}
@@ -91,4 +91,14 @@ func (c *MessageContext) GetRetryCount() int {
 // Body returns the raw message body.
 func (c *MessageContext) Body() []byte {
 	return c.Delivery.Body
+}
+
+// GetTraceID returns the trace ID for this message.
+func (c *MessageContext) GetTraceID() string {
+	trace, ok := c.GetHeader("trace_id").(string)
+	if !ok {
+		return ""
+	}
+
+	return trace
 }

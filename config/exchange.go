@@ -21,5 +21,5 @@ type ExchangeConfig struct {
 	Internal bool
 
 	// Args are optional exchange arguments
-	Args map[string]interface{}
+	Args map[string]any
 }

@@ -363,19 +363,3 @@ func (c *Client) IsConnected() bool {
 func (c *Client) NewContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), c.config.Timeout)
 }
-
-// WithTimeout creates a context with timeout from the given parent context.
-func (c *Client) WithTimeout(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, c.config.Timeout)
-}
-
-// EnsureTimeout ensures the context has a deadline, adding one if needed.
-//
-// If the context already has a deadline, it returns the context unchanged.
-// Otherwise, it adds a timeout using the client's default timeout.
-func (c *Client) EnsureTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, hasDeadline := ctx.Deadline(); hasDeadline {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, c.config.Timeout)
-}

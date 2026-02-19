@@ -1,14 +1,13 @@
 # Batch Publishing
 
-High-performance batch publishing with pipelining and async worker pools.
+High-performance batch publishing with pipelining.
 
 ## Overview
 
-Publishing messages in batches provides significant performance improvements over sequential publishing. This library offers three batch publishing modes:
+Publishing messages in batches provides significant performance improvements over sequential publishing. This library offers two batch publishing modes:
 
 1. **Sequential** - Publish one by one (legacy, slowest)
 2. **Pipelined** - Send all, then wait for all confirms (5-10x faster)
-3. **Async Worker Pool** - Concurrent workers with controlled parallelism
 
 ## Publishing Modes
 
@@ -51,32 +50,6 @@ result, err := eventBus.PublishBatch(ctx, events,
 - Order matters
 
 **Performance**: ~1000-2000 msg/sec (5-10x faster)
-
-### Async Worker Pool
-
-Concurrent publishing with worker pool:
-
-```go
-events := []Event{event1, event2, event3, ..., event100}
-
-result, err := eventBus.PublishBatchAsync(ctx, events,
-    config.WithMaxConcurrency(50),
-)
-```
-
-**How it works**:
-1. Create worker pool (N goroutines)
-2. Workers consume events from channel
-3. Each worker publishes independently
-
-**When to use**:
-- Very large batches (>100 messages)
-- Order doesn't matter
-- High throughput needed
-
-**Performance**: ~2000-5000 msg/sec
-
-**Warning**: Messages may be published out of order!
 
 ## Batch Result
 
@@ -146,23 +119,6 @@ result, err := eventBus.PublishBatch(ctx, events,
 
 **Default**: `false` (continues on errors)
 
-### WithMaxConcurrency
-
-Limit concurrent workers:
-
-```go
-result, err := eventBus.PublishBatchAsync(ctx, events,
-    config.WithMaxConcurrency(50),
-)
-```
-
-**Guidelines**:
-- CPU-bound processing: Use CPU count × 2
-- I/O-bound (network): Use 50-100
-- Memory constrained: Use 10-20
-
-**Default**: Unlimited (one goroutine per event)
-
 ## Performance Comparison
 
 Benchmark with 1000 messages, publisher confirms enabled:
@@ -171,8 +127,6 @@ Benchmark with 1000 messages, publisher confirms enabled:
 |--------|--------------|------------------|-------|
 | Sequential | 150 | ~6.6s | One by one |
 | Pipelined | 1500 | ~0.66s | **5-10x faster** |
-| Async (unlimited) | 2000 | ~0.5s | May be out of order |
-| Async (50 workers) | 1800 | ~0.55s | Controlled parallelism |
 
 ## Use Cases
 
@@ -205,10 +159,20 @@ for _, record := range records {
     events = append(events, NewRecordImportedEvent(record))
 }
 
-// Use async with worker pool (order doesn't matter)
-result, err := eventBus.PublishBatchAsync(ctx, events,
-    config.WithMaxConcurrency(100),
-)
+// Use pipelined batch in chunks for large volumes
+const chunkSize = 1000
+for i := 0; i < len(events); i += chunkSize {
+    end := i + chunkSize
+    if end > len(events) {
+        end = len(events)
+    }
+    result, err := eventBus.PublishBatch(ctx, events[i:end],
+        config.WithPipelining(true),
+    )
+    if err != nil || result.Failed > 0 {
+        log.Printf("Chunk %d had failures", i/chunkSize)
+    }
+}
 ```
 
 ### Use Case 3: Event Replay
@@ -335,8 +299,7 @@ wg.Wait()
 
 2. **Choose appropriate batch size**:
    - Small batches (<10): Use single `Publish()`
-   - Medium batches (10-100): Use `PublishBatch` with pipelining
-   - Large batches (>100): Use `PublishBatchAsync`
+   - Medium/large batches (≥10): Use `PublishBatch` with pipelining, chunk into 1000s for very large volumes
 
 3. **Handle partial failures**:
    ```go
@@ -397,7 +360,3 @@ Messages ≥ 100, order doesn't matter
 Messages ≥ 100, order matters
   └─> Use PublishBatch with pipelining, chunk into batches of 1000
 ```
-
-## Complete Example
-
-See [examples/batch_publishing/](../examples/batch_publishing/) for a working example with performance comparisons.

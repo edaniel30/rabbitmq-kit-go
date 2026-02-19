@@ -2,12 +2,15 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"sync"
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/circuitbreaker"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
+	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Consumer is a consumer of messages from a queue.
@@ -102,9 +105,44 @@ func (c *Consumer) Consume(queue string, workers int) error {
 	retryHandler := NewHandler(c.publisher, c.client.config.MaxRetries)
 
 	// Start worker goroutines
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		go func(workerID int) {
 			for delivery := range deliveries {
+				// Get trace ID from headers, generate one if not present
+				traceID, ok := delivery.Headers["trace_id"].(string)
+				if !ok {
+					if delivery.Headers == nil {
+						delivery.Headers = amqp.Table{}
+					}
+					traceID = uuid.New().String()
+					delivery.Headers["trace_id"] = traceID
+				}
+
+				bodyJSON := map[string]any{}
+				err := json.Unmarshal(delivery.Body, &bodyJSON)
+				if err != nil {
+					c.client.config.Logger.Error(
+						context.Background(),
+						"Consumer Worker: Failed to unmarshal event body",
+						map[string]any{
+							"worker_id": workerID,
+							"error":     err,
+							"trace_id":  traceID,
+						},
+					)
+				}
+
+				c.client.config.Logger.Info(
+					context.Background(),
+					"Consumer Worker: Received event",
+					map[string]any{
+						"worker_id":  workerID,
+						"trace_id":   traceID,
+						"event_type": delivery.Type,
+						"event":      bodyJSON,
+					},
+				)
+
 				messageContext := &router.MessageContext{
 					Delivery: delivery,
 				}
@@ -118,6 +156,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						map[string]any{
 							"worker_id": workerID,
 							"state":     metrics.State,
+							"trace_id":  traceID,
 						},
 					)
 					// Nack without requeue - let DLX handle it or discard
@@ -134,6 +173,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						map[string]any{
 							"worker_id": workerID,
 							"type":      messageContext.GetType(),
+							"trace_id":  traceID,
 						},
 					)
 					_ = messageContext.Ack()
@@ -146,6 +186,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						"Consumer Worker: Handler error",
 						map[string]any{
 							"worker_id": workerID,
+							"trace_id":  messageContext.GetTraceID(),
 							"error":     err,
 						},
 					)
@@ -167,6 +208,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 							"Consumer Worker: Max retries exceeded, sending to DLQ",
 							map[string]any{
 								"worker_id": workerID,
+								"trace_id":  traceID,
 							},
 						)
 						_ = messageContext.Nack(false) // Nack without requeue (will go to DLX if configured)
@@ -177,6 +219,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 							map[string]any{
 								"worker_id": workerID,
 								"error":     retryErr,
+								"trace_id":  traceID,
 							},
 						)
 						_ = messageContext.Nack(false) // Nack without requeue
@@ -193,6 +236,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 							map[string]any{
 								"worker_id": workerID,
 								"error":     ackErr,
+								"trace_id":  traceID,
 							},
 						)
 					}
