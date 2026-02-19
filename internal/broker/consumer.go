@@ -114,7 +114,8 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					if delivery.Headers == nil {
 						delivery.Headers = amqp.Table{}
 					}
-					delivery.Headers["trace_id"] = uuid.New().String()
+					traceID = uuid.New().String()
+					delivery.Headers["trace_id"] = traceID
 				}
 
 				bodyJSON := map[string]any{}
