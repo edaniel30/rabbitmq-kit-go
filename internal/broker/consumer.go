@@ -225,6 +225,16 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						_ = messageContext.Nack(false) // Nack without requeue
 					default:
 						// Successfully requeued, ack the original
+						retryCount := messageContext.GetRetryCount() + 1
+						c.client.config.Logger.Info(
+							context.Background(),
+							"Consumer Worker: Message requeued for retry",
+							map[string]any{
+								"worker_id":   workerID,
+								"trace_id":    traceID,
+								"retry_count": retryCount,
+							},
+						)
 						_ = messageContext.Ack()
 					}
 				} else {
