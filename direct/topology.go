@@ -14,8 +14,12 @@ type Topology struct {
 }
 
 // DeclareTopology declares the exchange, declares the queue, and binds the
-// queue to the exchange using Queue.RoutingKeys (one binding per key, or a
-// single empty-key binding if RoutingKeys is empty).
+// queue to the exchange using Queue.RoutingKeys (one binding per key).
+//
+// If Queue.RoutingKeys is empty, no binding is created — the queue is left
+// unbound and the caller is expected to bind it explicitly. This avoids the
+// silent non-delivery that would result from binding with an empty key on a
+// topic/direct exchange.
 //
 // The Queue.Exchange field is ignored — bindings always target Exchange.Name
 // from the same Topology, so the two cannot drift apart.
@@ -80,12 +84,14 @@ func declareQueue(ch *amqp.Channel, cfg config.QueueConfig) (amqp.Queue, error) 
 	)
 }
 
-// bindQueue binds queueName to exchangeName for each routing key. If
-// routingKeys is empty, a single empty-key binding is created (fanout-style).
+// bindQueue binds queueName to exchangeName for each routing key.
+//
+// If routingKeys is empty, no binding is created — the queue is left
+// unbound and the caller is expected to bind it explicitly via the
+// underlying channel. This avoids the silent non-delivery that would
+// happen with an empty-key binding on a topic/direct exchange (where
+// "" matches nothing).
 func bindQueue(ch *amqp.Channel, queueName, exchangeName string, routingKeys []string) error {
-	if len(routingKeys) == 0 {
-		return ch.QueueBind(queueName, "", exchangeName, false, nil)
-	}
 	for _, rk := range routingKeys {
 		if err := ch.QueueBind(queueName, rk, exchangeName, false, nil); err != nil {
 			return err
