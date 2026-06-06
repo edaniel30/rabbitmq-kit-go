@@ -72,7 +72,7 @@ func (p *Publisher) setupConfirms() {
 	// Start confirmation processor
 	go p.processConfirmations()
 
-	p.client.config.Logger.Info(
+	p.client.config.Logger.Debug(
 		context.Background(),
 		"Publisher: High-performance confirms enabled",
 		nil,
@@ -140,7 +140,7 @@ func (p *Publisher) ensureConfirmsSetup() {
 			p.mu.Unlock()
 
 			go p.processConfirmations()
-			p.client.config.Logger.Info(
+			p.client.config.Logger.Debug(
 				context.Background(),
 				"Publisher: Confirms re-initialized after reconnection",
 				nil,
