@@ -132,7 +132,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					)
 				}
 
-				c.client.config.Logger.Info(
+				c.client.config.Logger.Debug(
 					context.Background(),
 					"Consumer Worker: Received event",
 					map[string]any{
@@ -226,7 +226,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					default:
 						// Successfully requeued, ack the original
 						retryCount := messageContext.GetRetryCount() + 1
-						c.client.config.Logger.Info(
+						c.client.config.Logger.Debug(
 							context.Background(),
 							"Consumer Worker: Message requeued for retry",
 							map[string]any{
