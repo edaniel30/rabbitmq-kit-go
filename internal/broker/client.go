@@ -86,7 +86,7 @@ func (c *Client) connect() error {
 			_ = conn.Close()
 			return errors.NewConnectionError("enable publisher confirms", err)
 		}
-		c.config.Logger.Info(context.Background(), "Publisher confirms enabled", nil)
+		c.config.Logger.Debug(context.Background(), "Publisher confirms enabled", nil)
 	}
 
 	// Setup topology (exchanges, queues, bindings)
