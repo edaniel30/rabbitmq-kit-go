@@ -96,15 +96,29 @@ func (c *Client) connect() error {
 		return err
 	}
 
-	// Setup close notification for reconnection
-	closeErrChan := make(chan *amqp.Error)
-	c.conn.NotifyClose(closeErrChan)
+	// Watch both the connection and the channel for unexpected closes.
+	// conn.NotifyClose only fires on TCP-level or connection-level AMQP errors
+	// (e.g. 320, 530). Channel-level errors like AMQP 504 close the channel
+	// while leaving the TCP connection alive, so conn.NotifyClose never fires
+	// and handleReconnect would never wake up without the channel watcher below.
+	connCloseChan := make(chan *amqp.Error, 1)
+	chanCloseChan := make(chan *amqp.Error, 1)
+	c.conn.NotifyClose(connCloseChan)
+	ch.NotifyClose(chanCloseChan)
 
 	go func() {
-		err := <-closeErrChan
-		if err != nil && !c.closed {
-			c.config.Logger.Warn(context.Background(), "Connection closed unexpectedly", map[string]any{"error": err})
-			c.done <- true
+		var closeErr *amqp.Error
+		select {
+		case closeErr = <-connCloseChan:
+		case closeErr = <-chanCloseChan:
+		}
+		if closeErr != nil && !c.closed {
+			c.config.Logger.Warn(context.Background(), "RabbitMQ connection/channel closed unexpectedly", map[string]any{"error": closeErr})
+			select {
+			case c.done <- true:
+			default:
+				// handleReconnect already has a pending signal; skip the duplicate.
+			}
 		}
 	}()
 
@@ -354,6 +368,25 @@ func (c *Client) IsConnected() bool {
 	defer c.mu.RUnlock()
 
 	return c.conn != nil && !c.conn.IsClosed()
+}
+
+// Reconnect signals handleReconnect to start a new connection attempt immediately,
+// bypassing the remaining ReconnectDelay. Safe to call concurrently — if a
+// reconnect is already in progress the signal is dropped (non-blocking send).
+func (c *Client) Reconnect() {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+
+	if closed {
+		return
+	}
+
+	select {
+	case c.done <- true:
+	default:
+		// Reconnect already in progress; signal dropped intentionally.
+	}
 }
 
 // NewContext creates a new context with the default timeout from config.
