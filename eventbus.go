@@ -171,6 +171,14 @@ func (b *EventBus) IsConnected() bool {
 	return b.client.IsConnected()
 }
 
+// Reconnect signals the client to attempt reconnection immediately.
+// Useful when a publish failure is detected and the caller wants to
+// trigger recovery without waiting for the automatic reconnect delay.
+// Safe to call concurrently — duplicate signals are dropped.
+func (b *EventBus) Reconnect() {
+	b.client.Reconnect()
+}
+
 // GetCircuitBreakerMetrics returns the current circuit breaker metrics.
 //
 // Returns nil if circuit breaker is not enabled or consumer is not initialized.
