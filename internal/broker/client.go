@@ -130,14 +130,29 @@ func (c *Client) connect() error {
 	go func() {
 		for b := range blockedChan {
 			if b.Active {
-				c.config.Logger.Error(context.Background(), "RabbitMQ connection blocked by broker", map[string]any{"reason": b.Reason})
+				c.config.Logger.Warn(context.Background(), "RabbitMQ connection blocked by broker", map[string]any{"reason": b.Reason})
 				if c.config.OnConnectionBlocked != nil {
-					c.config.OnConnectionBlocked(b.Reason)
+					reason := b.Reason
+					go func() {
+						defer func() {
+							if r := recover(); r != nil {
+								c.config.Logger.Warn(context.Background(), "panic in OnConnectionBlocked callback", map[string]any{"recover": r})
+							}
+						}()
+						c.config.OnConnectionBlocked(reason)
+					}()
 				}
 			} else {
 				c.config.Logger.Info(context.Background(), "RabbitMQ connection unblocked", nil)
 				if c.config.OnConnectionUnblocked != nil {
-					c.config.OnConnectionUnblocked()
+					go func() {
+						defer func() {
+							if r := recover(); r != nil {
+								c.config.Logger.Warn(context.Background(), "panic in OnConnectionUnblocked callback", map[string]any{"recover": r})
+							}
+						}()
+						c.config.OnConnectionUnblocked()
+					}()
 				}
 			}
 		}

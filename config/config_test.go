@@ -165,6 +165,25 @@ func TestConfigOptions(t *testing.T) {
 				assert.Equal(t, "test.exchange", cfg.Queues[0].Exchange)
 			},
 		},
+		{
+			name: "WithConnectionBlockedCallback",
+			option: WithConnectionBlockedCallback(
+				func(reason string) {},
+				func() {},
+			),
+			validate: func(t *testing.T, cfg Config) {
+				assert.NotNil(t, cfg.OnConnectionBlocked)
+				assert.NotNil(t, cfg.OnConnectionUnblocked)
+			},
+		},
+		{
+			name:   "WithConnectionBlockedCallback_nil_args",
+			option: WithConnectionBlockedCallback(nil, nil),
+			validate: func(t *testing.T, cfg Config) {
+				assert.Nil(t, cfg.OnConnectionBlocked)
+				assert.Nil(t, cfg.OnConnectionUnblocked)
+			},
+		},
 	}
 
 	for _, tt := range tests {

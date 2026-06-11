@@ -191,6 +191,34 @@ func TestClient_DLQ(t *testing.T) {
 	})
 }
 
+func TestClient_ConnectionBlockedCallbacks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	t.Run("callbacks registered do not break connection", func(t *testing.T) {
+		blockedCalled := make(chan string, 1)
+		unblockedCalled := make(chan struct{}, 1)
+
+		cfg := config.DefaultConfig()
+		cfg.URI = sharedContainer.URI
+		cfg.Logger = logger.New()
+		config.WithConnectionBlockedCallback(
+			func(reason string) { blockedCalled <- reason },
+			func() { unblockedCalled <- struct{}{} },
+		)(&cfg)
+
+		require.NotNil(t, cfg.OnConnectionBlocked)
+		require.NotNil(t, cfg.OnConnectionUnblocked)
+
+		client, err := New(cfg)
+		require.NoError(t, err)
+		defer func() { _ = client.Close() }()
+
+		assert.True(t, client.IsConnected())
+	})
+}
+
 func TestClient_Errors(t *testing.T) {
 	t.Run("New with invalid URI returns error", func(t *testing.T) {
 		cfg := config.DefaultConfig()
