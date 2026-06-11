@@ -47,6 +47,10 @@ type Config struct {
 	// Topology configuration
 	Exchanges []ExchangeConfig // Exchanges to declare on connect
 	Queues    []QueueConfig    // Queues to declare and bind on connect
+
+	// Connection lifecycle callbacks
+	OnConnectionBlocked   func(reason string) // called when broker applies backpressure (disk/memory alarm)
+	OnConnectionUnblocked func()              // called when broker lifts the block
 }
 
 // Option is a functional option for configuring the client.
@@ -374,5 +378,16 @@ func WithDLQExchange(exchangeName string) Option {
 func WithDLQPrefix(prefix string) Option {
 	return func(c *Config) {
 		c.DLQConfig.QueuePrefix = prefix
+	}
+}
+
+// WithConnectionBlockedCallback registers callbacks for broker-level flow control.
+// onBlocked is called with the broker's reason string when the connection is blocked
+// (e.g. disk or memory alarm). onUnblocked is called when the block is lifted.
+// Either argument may be nil to ignore that event.
+func WithConnectionBlockedCallback(onBlocked func(reason string), onUnblocked func()) Option {
+	return func(c *Config) {
+		c.OnConnectionBlocked = onBlocked
+		c.OnConnectionUnblocked = onUnblocked
 	}
 }

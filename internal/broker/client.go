@@ -122,6 +122,27 @@ func (c *Client) connect() error {
 		}
 	}()
 
+	// Watch for broker-initiated flow control (disk/memory alarms).
+	// The channel is closed by amqp091-go when the connection closes, so this
+	// goroutine exits automatically — no leak on reconnect cycles.
+	blockedChan := make(chan amqp.Blocking, 1)
+	conn.NotifyBlocked(blockedChan)
+	go func() {
+		for b := range blockedChan {
+			if b.Active {
+				c.config.Logger.Error(context.Background(), "RabbitMQ connection blocked by broker", map[string]any{"reason": b.Reason})
+				if c.config.OnConnectionBlocked != nil {
+					c.config.OnConnectionBlocked(b.Reason)
+				}
+			} else {
+				c.config.Logger.Info(context.Background(), "RabbitMQ connection unblocked", nil)
+				if c.config.OnConnectionUnblocked != nil {
+					c.config.OnConnectionUnblocked()
+				}
+			}
+		}
+	}()
+
 	return nil
 }
 
