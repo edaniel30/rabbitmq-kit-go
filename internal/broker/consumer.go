@@ -126,7 +126,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						"Consumer Worker: Failed to unmarshal event body",
 						map[string]any{
 							"worker_id": workerID,
-							"error":     err,
+							"error":     err.Error(),
 							"trace_id":  traceID,
 						},
 					)
@@ -187,7 +187,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						map[string]any{
 							"worker_id": workerID,
 							"trace_id":  messageContext.GetTraceID(),
-							"error":     err,
+							"error":     err.Error(),
 						},
 					)
 
@@ -205,20 +205,20 @@ func (c *Consumer) Consume(queue string, workers int) error {
 					case stderrors.Is(retryErr, errors.ErrMaxRetriesExceeded):
 						c.client.config.Logger.Warn(
 							context.Background(),
-							"Consumer Worker: Max retries exceeded, sending to DLQ",
+							"Consumer Worker: Max retries exceeded, discarding message",
 							map[string]any{
 								"worker_id": workerID,
 								"trace_id":  traceID,
 							},
 						)
-						_ = messageContext.Nack(false) // Nack without requeue (will go to DLX if configured)
+						_ = messageContext.Nack(false) // Nack without requeue (routed to DLX if configured on the queue)
 					case retryErr != nil:
 						c.client.config.Logger.Error(
 							context.Background(),
 							"Consumer Worker: Retry failed, nacking message",
 							map[string]any{
 								"worker_id": workerID,
-								"error":     retryErr,
+								"error":     retryErr.Error(),
 								"trace_id":  traceID,
 							},
 						)
@@ -245,7 +245,7 @@ func (c *Consumer) Consume(queue string, workers int) error {
 							"Consumer Worker: Failed to ack message",
 							map[string]any{
 								"worker_id": workerID,
-								"error":     ackErr,
+								"error":     ackErr.Error(),
 								"trace_id":  traceID,
 							},
 						)
