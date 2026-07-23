@@ -181,15 +181,20 @@ func (c *Consumer) Consume(queue string, workers int) error {
 				}
 
 				if err := serviceHandler.Execute(messageContext); err != nil {
-					c.client.config.Logger.Error(
-						context.Background(),
-						"Consumer Worker: Handler error",
-						map[string]any{
-							"worker_id": workerID,
-							"trace_id":  messageContext.GetTraceID(),
-							"error":     err.Error(),
-						},
-					)
+					logFields := map[string]any{
+						"worker_id": workerID,
+						"trace_id":  messageContext.GetTraceID(),
+						"error":     err.Error(),
+					}
+					if errors.IsExpectedRetry(err) {
+						// Expected, self-healing condition (see
+						// errors.NewExpectedRetryError) - Warn instead of
+						// Error so it doesn't carry a stack trace or read as
+						// something that needs investigation.
+						c.client.config.Logger.Warn(context.Background(), "Consumer Worker: Handler error (expected, retrying)", logFields)
+					} else {
+						c.client.config.Logger.Error(context.Background(), "Consumer Worker: Handler error", logFields)
+					}
 
 					// Record failure in circuit breaker
 					if c.circuitBreaker != nil {

@@ -183,3 +183,42 @@ func NewHandlerError(eventType, messageID string, cause error) error {
 		Cause:     cause,
 	}
 }
+
+// ExpectedRetryError marks a handler error as an expected, self-healing
+// condition (e.g. an optimistic-concurrency conflict from two workers
+// racing on the same document) rather than a failure worth investigating.
+// The consumer still retries it exactly like any other handler error - the
+// only difference is how it's logged (see NewExpectedRetryError).
+type ExpectedRetryError struct {
+	Cause error
+}
+
+func (e *ExpectedRetryError) Error() string {
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return "rabbitmq: expected retry"
+}
+
+func (e *ExpectedRetryError) Unwrap() error {
+	return e.Cause
+}
+
+// NewExpectedRetryError wraps cause so the consumer logs the retry at Warn
+// (no stack trace) instead of Error. Use this for errors a handler expects
+// to routinely resolve on retry (optimistic-concurrency conflicts between
+// concurrent workers, for example) - as opposed to unexpected failures that
+// genuinely warrant investigation.
+func NewExpectedRetryError(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &ExpectedRetryError{Cause: cause}
+}
+
+// IsExpectedRetry reports whether err (or any error it wraps) was marked via
+// NewExpectedRetryError.
+func IsExpectedRetry(err error) bool {
+	var e *ExpectedRetryError
+	return errors.As(err, &e)
+}
