@@ -2,6 +2,7 @@ package errors
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -228,6 +229,43 @@ func TestHandlerError(t *testing.T) {
 		assert.True(t, errors.As(err, &handlerErr))
 		assert.Equal(t, "test.event", handlerErr.EventType)
 		assert.Equal(t, "test-id", handlerErr.MessageID)
+	})
+}
+
+func TestExpectedRetryError(t *testing.T) {
+	t.Run("NewExpectedRetryError wraps cause", func(t *testing.T) {
+		cause := errors.New("version conflict, please retry")
+		err := NewExpectedRetryError(cause)
+		assert.Error(t, err)
+		assert.Equal(t, "version conflict, please retry", err.Error())
+	})
+
+	t.Run("NewExpectedRetryError with nil cause returns nil", func(t *testing.T) {
+		assert.NoError(t, NewExpectedRetryError(nil))
+	})
+
+	t.Run("ExpectedRetryError Unwrap", func(t *testing.T) {
+		cause := errors.New("conflict")
+		err := NewExpectedRetryError(cause)
+		assert.Equal(t, cause, errors.Unwrap(err))
+	})
+
+	t.Run("IsExpectedRetry is true for a wrapped error", func(t *testing.T) {
+		err := NewExpectedRetryError(errors.New("conflict"))
+		assert.True(t, IsExpectedRetry(err))
+	})
+
+	t.Run("IsExpectedRetry is true through additional wrapping", func(t *testing.T) {
+		err := fmt.Errorf("failed to save: %w", NewExpectedRetryError(errors.New("conflict")))
+		assert.True(t, IsExpectedRetry(err))
+	})
+
+	t.Run("IsExpectedRetry is false for a plain error", func(t *testing.T) {
+		assert.False(t, IsExpectedRetry(errors.New("some other failure")))
+	})
+
+	t.Run("IsExpectedRetry is false for nil", func(t *testing.T) {
+		assert.False(t, IsExpectedRetry(nil))
 	})
 }
 
