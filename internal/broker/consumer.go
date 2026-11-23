@@ -186,6 +186,18 @@ func (c *Consumer) Consume(queue string, workers int) error {
 						"trace_id":  messageContext.GetTraceID(),
 						"error":     err.Error(),
 					}
+
+					// A retry cannot fix it: no retries, and no failure for the
+					// circuit breaker (malformed or forged messages must not open
+					// it and drop legitimate ones). Nack without requeue: to the
+					// DLX if the queue has one, dropped otherwise.
+					if c.isPermanent(err) {
+						logFields["event_type"] = messageContext.GetType()
+						c.client.config.Logger.Warn(context.Background(), "Consumer Worker: Handler error (permanent, not retried)", logFields)
+						_ = messageContext.Nack(false)
+						continue
+					}
+
 					if errors.IsExpectedRetry(err) {
 						// Expected, self-healing condition (see
 						// errors.NewExpectedRetryError) - Warn instead of
@@ -300,4 +312,18 @@ func (c *Consumer) ResetCircuitBreaker() bool {
 
 	c.circuitBreaker.Reset()
 	return true
+}
+
+// isPermanent reports whether a handler error must not be retried: wrapped
+// with errors.NewPermanentError, or matched by the configured classifier. An
+// error explicitly marked with errors.NewExpectedRetryError is always retried.
+func (c *Consumer) isPermanent(err error) bool {
+	if errors.IsExpectedRetry(err) {
+		return false
+	}
+	if errors.IsPermanent(err) {
+		return true
+	}
+	classify := c.client.config.PermanentErrorClassifier
+	return classify != nil && classify(err)
 }

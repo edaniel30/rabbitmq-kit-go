@@ -117,6 +117,24 @@ config.WithMaxRetries(5)
 
 **Default**: 3
 
+### WithPermanentErrors
+
+Declare which handler errors a retry cannot fix (invalid data, an entity that no longer exists):
+
+```go
+config.WithPermanentErrors(func(err error) bool {
+    return domain.IsInvalidInputError(err) || domain.IsNotFoundError(err)
+})
+```
+
+**Behavior** (also for errors wrapped with `errors.NewPermanentError`):
+- No retries: the message is NACKed without requeue at once, so it goes to the DLQ (if configured) or is discarded
+- Not counted as a circuit breaker failure: malformed or forged messages cannot open the circuit
+- Logged at Warn, with the event type
+- An error wrapped with `errors.NewExpectedRetryError` is always retried, even if the classifier matches
+
+**Default**: nil (only `errors.NewPermanentError` is permanent)
+
 ## Topology Setup
 
 ### Exchanges

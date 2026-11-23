@@ -14,6 +14,7 @@ A Dead Letter Queue (DLQ) receives messages that couldn't be processed after all
 
 ```
 1. Message fails → Retry (up to MaxRetries)
+   (a permanent error — `errors.NewPermanentError` or `config.WithPermanentErrors` — skips the retries and goes straight to step 2)
 2. Max retries exceeded → NACK without requeue
 3. Message sent to DLX (Dead Letter Exchange)
 4. DLX routes to DLQ
