@@ -222,3 +222,44 @@ func IsExpectedRetry(err error) bool {
 	var e *ExpectedRetryError
 	return errors.As(err, &e)
 }
+
+// PermanentError marks a handler error that a retry cannot fix: invalid or
+// forged message data, an entity that no longer exists. The consumer does
+// not retry it and does not count it against the circuit breaker: it nacks
+// the message without requeue, so the message goes to the DLQ when one is
+// configured (or is dropped otherwise), and logs it at Warn.
+//
+// Without this, such messages burn every retry and each one counts as a
+// failure: a few malformed messages are enough to open the circuit breaker,
+// which then rejects legitimate messages too.
+type PermanentError struct {
+	Cause error
+}
+
+func (e *PermanentError) Error() string {
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return "rabbitmq: permanent handler error"
+}
+
+func (e *PermanentError) Unwrap() error {
+	return e.Cause
+}
+
+// NewPermanentError wraps cause so the consumer gives up on the message at
+// once (see PermanentError). Services that classify their own errors can
+// instead set config.WithPermanentErrors and return them unwrapped.
+func NewPermanentError(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &PermanentError{Cause: cause}
+}
+
+// IsPermanent reports whether err (or any error it wraps) was marked via
+// NewPermanentError.
+func IsPermanent(err error) bool {
+	var e *PermanentError
+	return errors.As(err, &e)
+}

@@ -288,3 +288,35 @@ func TestErrorWrapping(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrNoConnection))
 	})
 }
+
+func TestPermanentError(t *testing.T) {
+	t.Run("NewPermanentError wraps cause", func(t *testing.T) {
+		err := NewPermanentError(errors.New("user not found"))
+		assert.Error(t, err)
+		assert.Equal(t, "user not found", err.Error())
+	})
+
+	t.Run("NewPermanentError with nil cause returns nil", func(t *testing.T) {
+		assert.NoError(t, NewPermanentError(nil))
+	})
+
+	t.Run("PermanentError Unwrap", func(t *testing.T) {
+		cause := errors.New("invalid id")
+		assert.Equal(t, cause, errors.Unwrap(NewPermanentError(cause)))
+	})
+
+	t.Run("PermanentError without cause has a message", func(t *testing.T) {
+		assert.NotEmpty(t, (&PermanentError{}).Error())
+	})
+
+	t.Run("IsPermanent through additional wrapping", func(t *testing.T) {
+		err := fmt.Errorf("handling event: %w", NewPermanentError(errors.New("invalid id")))
+		assert.True(t, IsPermanent(err))
+	})
+
+	t.Run("IsPermanent is false for plain errors, expected retries and nil", func(t *testing.T) {
+		assert.False(t, IsPermanent(errors.New("db down")))
+		assert.False(t, IsPermanent(NewExpectedRetryError(errors.New("conflict"))))
+		assert.False(t, IsPermanent(nil))
+	})
+}

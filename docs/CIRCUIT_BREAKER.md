@@ -19,7 +19,7 @@ CLOSED (normal) ──> OPEN (failing) ──> HALF-OPEN (testing) ──> CLOSE
 ### CLOSED (Normal Operation)
 
 - All messages are processed
-- Failures are counted
+- Failures are counted, except permanent errors (`errors.NewPermanentError` or `config.WithPermanentErrors`): a malformed or forged message says nothing about the downstream service, so it must not open the circuit
 - When failures >= `maxFailures` → transition to OPEN
 
 ### OPEN (Circuit Broken)
