@@ -166,6 +166,14 @@ func TestConfigOptions(t *testing.T) {
 			},
 		},
 		{
+			name:   "WithPermanentErrors",
+			option: WithPermanentErrors(func(err error) bool { return err != nil }),
+			validate: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.PermanentErrorClassifier)
+				assert.True(t, cfg.PermanentErrorClassifier(assert.AnError))
+			},
+		},
+		{
 			name: "WithConnectionBlockedCallback",
 			option: WithConnectionBlockedCallback(
 				func(reason string) {},

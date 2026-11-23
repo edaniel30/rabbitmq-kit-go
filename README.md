@@ -134,8 +134,24 @@ eventBus.RegisterHandler("user.created", func(ctx *router.MessageContext) error 
     // return nil      → ACK (message processed)
     // return error    → NACK with retry (uses x-retry-count)
     //                   After MaxRetries → NACK without requeue (goes to DLQ)
+    // return errors.NewPermanentError(err)
+    //                 → NACK without requeue at once: no retries, not counted
+    //                   by the circuit breaker (goes to DLQ)
 })
 ```
+
+**Permanent errors.** Some failures cannot be fixed by retrying: invalid or forged message data, an entity that no longer exists. Retrying them wastes the retries, and every one counts against the circuit breaker, so a few malformed messages can open it and get legitimate ones rejected. Mark them permanent, per error with `errors.NewPermanentError(err)`, or for the whole consumer with a classifier:
+
+```go
+eventBus, _ := rabbitmq.NewEventBus(
+    config.DefaultConfig(),
+    config.WithPermanentErrors(func(err error) bool {
+        return domain.IsInvalidInputError(err) || domain.IsNotFoundError(err)
+    }),
+)
+```
+
+An error wrapped with `errors.NewExpectedRetryError` is always retried, even if the classifier matches it.
 
 ### Publisher Confirms
 
@@ -162,6 +178,7 @@ err := eventBus.Publish(ctx, event)
 | `WithMaxRetries` | `3` | Max retry attempts |
 | `WithPrefetchCount` | `10` | Unacked messages per worker |
 | `WithCircuitBreaker` | `false` | Enable circuit breaker |
+| `WithPermanentErrors` | `nil` | Handler errors that are not retried nor counted by the circuit breaker |
 | `WithDLQEnabled` | `false` | Auto-setup DLQ infrastructure |
 
 See [Configuration Guide](docs/CONFIGURATION.md) for all options.

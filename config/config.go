@@ -40,6 +40,11 @@ type Config struct {
 	CircuitBreakerResetTimeout     time.Duration // Time to wait before attempting half-open (default: 60s)
 	CircuitBreakerHalfOpenRequests int           // Max requests in half-open state (default: 3)
 
+	// PermanentErrorClassifier reports which handler errors a retry cannot
+	// fix, in addition to errors wrapped with errors.NewPermanentError: they
+	// are not retried and not counted against the circuit breaker (default: nil)
+	PermanentErrorClassifier func(error) bool
+
 	// Dead Letter Queue configuration
 	DLQEnabled bool      // Enable automatic DLQ setup (default: false)
 	DLQConfig  DLQConfig // DLQ configuration options
@@ -378,6 +383,24 @@ func WithDLQExchange(exchangeName string) Option {
 func WithDLQPrefix(prefix string) Option {
 	return func(c *Config) {
 		c.DLQConfig.QueuePrefix = prefix
+	}
+}
+
+// WithPermanentErrors sets which handler errors are permanent, i.e. a retry
+// cannot fix them (invalid data, an entity that no longer exists). The
+// consumer nacks those messages without requeue (to the DLQ if configured),
+// does not retry them and does not count them against the circuit breaker.
+// Errors wrapped with errors.NewPermanentError are permanent regardless, and
+// errors wrapped with errors.NewExpectedRetryError are always retried.
+//
+// Example:
+//
+//	config.WithPermanentErrors(func(err error) bool {
+//	    return domain.IsInvalidInputError(err) || domain.IsNotFoundError(err)
+//	})
+func WithPermanentErrors(classifier func(error) bool) Option {
+	return func(c *Config) {
+		c.PermanentErrorClassifier = classifier
 	}
 }
 
