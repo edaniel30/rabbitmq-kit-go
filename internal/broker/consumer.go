@@ -8,6 +8,7 @@ import (
 
 	"github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/circuitbreaker"
+	"github.com/edaniel30/rabbitmq-kit-go/internal/tracing"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -108,176 +109,189 @@ func (c *Consumer) Consume(queue string, workers int) error {
 	for i := range workers {
 		go func(workerID int) {
 			for delivery := range deliveries {
-				// Get trace ID from headers, generate one if not present
-				traceID, ok := delivery.Headers["trace_id"].(string)
-				if !ok {
-					if delivery.Headers == nil {
-						delivery.Headers = amqp.Table{}
-					}
-					traceID = uuid.New().String()
-					delivery.Headers["trace_id"] = traceID
-				}
-
-				bodyJSON := map[string]any{}
-				err := json.Unmarshal(delivery.Body, &bodyJSON)
-				if err != nil {
-					c.client.config.Logger.Error(
-						context.Background(),
-						"Consumer Worker: Failed to unmarshal event body",
-						map[string]any{
-							"worker_id": workerID,
-							"error":     err.Error(),
-							"trace_id":  traceID,
-						},
-					)
-				}
-
-				c.client.config.Logger.Debug(
-					context.Background(),
-					"Consumer Worker: Received event",
-					map[string]any{
-						"worker_id":  workerID,
-						"trace_id":   traceID,
-						"event_type": delivery.Type,
-						"event":      bodyJSON,
-					},
-				)
-
-				messageContext := &router.MessageContext{
-					Delivery: delivery,
-				}
-
-				// Check circuit breaker if enabled
-				if c.circuitBreaker != nil && !c.circuitBreaker.AllowRequest() {
-					metrics := c.circuitBreaker.GetMetrics()
-					c.client.config.Logger.Warn(
-						context.Background(),
-						"Consumer Worker: Circuit breaker is open, rejecting message",
-						map[string]any{
-							"worker_id": workerID,
-							"state":     metrics.State,
-							"trace_id":  traceID,
-						},
-					)
-					// Nack without requeue - let DLX handle it or discard
-					_ = messageContext.Nack(false)
-					continue
-				}
-
-				// Call user handler
-				serviceHandler := c.router.GetHandler(messageContext.GetType())
-				if serviceHandler == nil {
-					c.client.config.Logger.Error(
-						context.Background(),
-						"Consumer Worker: No handler found for message type",
-						map[string]any{
-							"worker_id": workerID,
-							"type":      messageContext.GetType(),
-							"trace_id":  traceID,
-						},
-					)
-					_ = messageContext.Ack()
-					continue
-				}
-
-				if err := serviceHandler.Execute(messageContext); err != nil {
-					logFields := map[string]any{
-						"worker_id": workerID,
-						"trace_id":  messageContext.GetTraceID(),
-						"error":     err.Error(),
-					}
-
-					// A retry cannot fix it: no retries, and no failure for the
-					// circuit breaker (malformed or forged messages must not open
-					// it and drop legitimate ones). Nack without requeue: to the
-					// DLX if the queue has one, dropped otherwise.
-					if c.isPermanent(err) {
-						logFields["event_type"] = messageContext.GetType()
-						c.client.config.Logger.Warn(context.Background(), "Consumer Worker: Handler error (permanent, not retried)", logFields)
-						_ = messageContext.Nack(false)
-						continue
-					}
-
-					if errors.IsExpectedRetry(err) {
-						// Expected, self-healing condition (see
-						// errors.NewExpectedRetryError) - Warn instead of
-						// Error so it doesn't carry a stack trace or read as
-						// something that needs investigation.
-						c.client.config.Logger.Warn(context.Background(), "Consumer Worker: Handler error (expected, retrying)", logFields)
-					} else {
-						c.client.config.Logger.Error(context.Background(), "Consumer Worker: Handler error", logFields)
-					}
-
-					// Record failure in circuit breaker
-					if c.circuitBreaker != nil {
-						c.circuitBreaker.RecordFailure()
-					}
-
-					// Try to retry the message
-					retryCtx, cancel := c.client.NewContext()
-					retryErr := retryHandler.Retry(retryCtx, delivery)
-					cancel()
-
-					switch {
-					case stderrors.Is(retryErr, errors.ErrMaxRetriesExceeded):
-						c.client.config.Logger.Warn(
-							context.Background(),
-							"Consumer Worker: Max retries exceeded, discarding message",
-							map[string]any{
-								"worker_id": workerID,
-								"trace_id":  traceID,
-							},
-						)
-						_ = messageContext.Nack(false) // Nack without requeue (routed to DLX if configured on the queue)
-					case retryErr != nil:
-						c.client.config.Logger.Error(
-							context.Background(),
-							"Consumer Worker: Retry failed, nacking message",
-							map[string]any{
-								"worker_id": workerID,
-								"error":     retryErr.Error(),
-								"trace_id":  traceID,
-							},
-						)
-						_ = messageContext.Nack(false) // Nack without requeue
-					default:
-						// Successfully requeued, ack the original
-						retryCount := messageContext.GetRetryCount() + 1
-						c.client.config.Logger.Debug(
-							context.Background(),
-							"Consumer Worker: Message requeued for retry",
-							map[string]any{
-								"worker_id":   workerID,
-								"trace_id":    traceID,
-								"retry_count": retryCount,
-							},
-						)
-						_ = messageContext.Ack()
-					}
-				} else {
-					// Success, acknowledge message
-					if ackErr := messageContext.Ack(); ackErr != nil {
-						c.client.config.Logger.Error(
-							context.Background(),
-							"Consumer Worker: Failed to ack message",
-							map[string]any{
-								"worker_id": workerID,
-								"error":     ackErr.Error(),
-								"trace_id":  traceID,
-							},
-						)
-					}
-
-					// Record success in circuit breaker
-					if c.circuitBreaker != nil {
-						c.circuitBreaker.RecordSuccess()
-					}
-				}
+				c.processDelivery(queue, workerID, delivery, retryHandler)
 			}
 		}(i)
 	}
 
 	return nil
+}
+
+// processDelivery handles one delivery: consumer span, trace ID, circuit breaker, handler,
+// then ack, retry or nack.
+func (c *Consumer) processDelivery(queue string, workerID int, delivery amqp.Delivery, retryHandler *Handler) {
+	// Consumer span, child of the publisher's span (trace context from the headers)
+	ctx, span := tracing.StartConsume(delivery, queue, delivery.Type)
+	var handlerErr error
+	defer func() { tracing.End(span, handlerErr) }()
+
+	// Get trace ID from headers; if not present, the span's trace ID or a new one
+	traceID, ok := delivery.Headers["trace_id"].(string)
+	if !ok || traceID == "" {
+		if delivery.Headers == nil {
+			delivery.Headers = amqp.Table{}
+		}
+		if traceID = tracing.TraceID(ctx); traceID == "" {
+			traceID = uuid.New().String()
+		}
+		delivery.Headers["trace_id"] = traceID
+	}
+
+	bodyJSON := map[string]any{}
+	err := json.Unmarshal(delivery.Body, &bodyJSON)
+	if err != nil {
+		c.client.config.Logger.Error(
+			ctx,
+			"Consumer Worker: Failed to unmarshal event body",
+			map[string]any{
+				"worker_id": workerID,
+				"error":     err.Error(),
+				"trace_id":  traceID,
+			},
+		)
+	}
+
+	c.client.config.Logger.Debug(
+		ctx,
+		"Consumer Worker: Received event",
+		map[string]any{
+			"worker_id":  workerID,
+			"trace_id":   traceID,
+			"event_type": delivery.Type,
+			"event":      bodyJSON,
+		},
+	)
+
+	messageContext := router.NewMessageContext(ctx, delivery)
+
+	// Check circuit breaker if enabled
+	if c.circuitBreaker != nil && !c.circuitBreaker.AllowRequest() {
+		metrics := c.circuitBreaker.GetMetrics()
+		c.client.config.Logger.Warn(
+			ctx,
+			"Consumer Worker: Circuit breaker is open, rejecting message",
+			map[string]any{
+				"worker_id": workerID,
+				"state":     metrics.State,
+				"trace_id":  traceID,
+			},
+		)
+		// Nack without requeue - let DLX handle it or discard
+		handlerErr = stderrors.New("circuit breaker open, message rejected")
+		_ = messageContext.Nack(false)
+		return
+	}
+
+	// Call user handler
+	serviceHandler := c.router.GetHandler(messageContext.GetType())
+	if serviceHandler == nil {
+		c.client.config.Logger.Error(
+			ctx,
+			"Consumer Worker: No handler found for message type",
+			map[string]any{
+				"worker_id": workerID,
+				"type":      messageContext.GetType(),
+				"trace_id":  traceID,
+			},
+		)
+		_ = messageContext.Ack()
+		return
+	}
+
+	if err := serviceHandler.Execute(messageContext); err != nil {
+		handlerErr = err
+		logFields := map[string]any{
+			"worker_id": workerID,
+			"trace_id":  messageContext.GetTraceID(),
+			"error":     err.Error(),
+		}
+
+		// A retry cannot fix it: no retries, and no failure for the
+		// circuit breaker (malformed or forged messages must not open
+		// it and drop legitimate ones). Nack without requeue: to the
+		// DLX if the queue has one, dropped otherwise.
+		if c.isPermanent(err) {
+			logFields["event_type"] = messageContext.GetType()
+			c.client.config.Logger.Warn(ctx, "Consumer Worker: Handler error (permanent, not retried)", logFields)
+			_ = messageContext.Nack(false)
+			return
+		}
+
+		if errors.IsExpectedRetry(err) {
+			// Expected, self-healing condition (see
+			// errors.NewExpectedRetryError) - Warn instead of
+			// Error so it doesn't carry a stack trace or read as
+			// something that needs investigation.
+			c.client.config.Logger.Warn(ctx, "Consumer Worker: Handler error (expected, retrying)", logFields)
+		} else {
+			c.client.config.Logger.Error(ctx, "Consumer Worker: Handler error", logFields)
+		}
+
+		// Record failure in circuit breaker
+		if c.circuitBreaker != nil {
+			c.circuitBreaker.RecordFailure()
+		}
+
+		// Try to retry the message
+		retryCtx, cancel := c.client.NewContext()
+		retryErr := retryHandler.Retry(retryCtx, delivery)
+		cancel()
+
+		switch {
+		case stderrors.Is(retryErr, errors.ErrMaxRetriesExceeded):
+			c.client.config.Logger.Warn(
+				ctx,
+				"Consumer Worker: Max retries exceeded, discarding message",
+				map[string]any{
+					"worker_id": workerID,
+					"trace_id":  traceID,
+				},
+			)
+			_ = messageContext.Nack(false) // Nack without requeue (routed to DLX if configured on the queue)
+		case retryErr != nil:
+			c.client.config.Logger.Error(
+				ctx,
+				"Consumer Worker: Retry failed, nacking message",
+				map[string]any{
+					"worker_id": workerID,
+					"error":     retryErr.Error(),
+					"trace_id":  traceID,
+				},
+			)
+			_ = messageContext.Nack(false) // Nack without requeue
+		default:
+			// Successfully requeued, ack the original
+			retryCount := messageContext.GetRetryCount() + 1
+			c.client.config.Logger.Debug(
+				ctx,
+				"Consumer Worker: Message requeued for retry",
+				map[string]any{
+					"worker_id":   workerID,
+					"trace_id":    traceID,
+					"retry_count": retryCount,
+				},
+			)
+			_ = messageContext.Ack()
+		}
+	} else {
+		// Success, acknowledge message
+		if ackErr := messageContext.Ack(); ackErr != nil {
+			c.client.config.Logger.Error(
+				ctx,
+				"Consumer Worker: Failed to ack message",
+				map[string]any{
+					"worker_id": workerID,
+					"error":     ackErr.Error(),
+					"trace_id":  traceID,
+				},
+			)
+		}
+
+		// Record success in circuit breaker
+		if c.circuitBreaker != nil {
+			c.circuitBreaker.RecordSuccess()
+		}
+	}
 }
 
 // GetCircuitBreakerMetrics returns the current circuit breaker metrics.

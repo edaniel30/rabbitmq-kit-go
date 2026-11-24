@@ -5,6 +5,8 @@ import (
 
 	"github.com/edaniel30/rabbitmq-kit-go/config"
 	"github.com/edaniel30/rabbitmq-kit-go/internal/broker"
+	"github.com/edaniel30/rabbitmq-kit-go/internal/tracing"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Publish publishes a single event to RabbitMQ.
@@ -16,8 +18,14 @@ import (
 //
 //	event := NewUserCreatedEvent(user.ID, user.Name, user.Email)
 //	err := eventBus.Publish(ctx, event)
-func (b *EventBus) Publish(ctx context.Context, event Event) error {
-	msg, err := createDefaultPublishing(event)
+//
+// With OpenTelemetry set up in the application, it records a PRODUCER span and carries the
+// trace context in the message headers, so the consumer's span joins the same trace.
+func (b *EventBus) Publish(ctx context.Context, event Event) (err error) {
+	ctx, span := tracing.StartPublish(ctx, event.Exchange(), event.Type())
+	defer func() { tracing.End(span, err) }()
+
+	msg, err := createDefaultPublishing(ctx, event)
 	if err != nil {
 		return err
 	}
@@ -95,11 +103,29 @@ func (b *EventBus) PublishBatch(ctx context.Context, events []Event, opts ...con
 
 // publishBatchPipeline uses pipelining for maximum throughput.
 func (b *EventBus) publishBatchPipeline(ctx context.Context, events []Event, cfg config.BatchConfig, result *BatchResult) (*BatchResult, error) {
+	// One PRODUCER span per event, ended once its confirmation (or error) is known
+	spans := make([]trace.Span, len(events))
+	endSpan := func(i int, err error) {
+		if spans[i] != nil {
+			tracing.End(spans[i], err)
+			spans[i] = nil
+		}
+	}
+	defer func() {
+		for i := range spans {
+			endSpan(i, nil)
+		}
+	}()
+
 	// Serialize all events first
 	messages := make([]broker.PublishMessage, len(events))
 	for i, event := range events {
-		msg, err := createDefaultPublishing(event)
+		msgCtx, span := tracing.StartPublish(ctx, event.Exchange(), event.Type())
+		spans[i] = span
+
+		msg, err := createDefaultPublishing(msgCtx, event)
 		if err != nil {
+			endSpan(i, err)
 			result.Failed++
 			result.Errors = append(result.Errors, BatchError{
 				Index: i,
@@ -123,11 +149,15 @@ func (b *EventBus) publishBatchPipeline(ctx context.Context, events []Event, cfg
 	messageErrors, err := b.publisher.PublishBatchPipeline(ctx, messages)
 	if err != nil {
 		// Fatal error (connection lost, etc.)
+		for i := range spans {
+			endSpan(i, err)
+		}
 		return result, err
 	}
 
 	// Process results
 	for i, msgErr := range messageErrors {
+		endSpan(i, msgErr)
 		if msgErr != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, BatchError{

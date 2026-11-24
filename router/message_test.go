@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -234,5 +235,19 @@ func TestMessageContext_GetTraceID(t *testing.T) {
 		ctx := &MessageContext{Delivery: amqp.Delivery{}}
 
 		assert.Equal(t, "", ctx.GetTraceID())
+	})
+}
+
+func TestMessageContext_Context(t *testing.T) {
+	t.Run("background when not set", func(t *testing.T) {
+		msg := &MessageContext{}
+		assert.NotNil(t, msg.Context())
+	})
+
+	t.Run("returns the context it was created with", func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(context.Background(), key{}, "v")
+		msg := NewMessageContext(ctx, amqp.Delivery{})
+		assert.Equal(t, "v", msg.Context().Value(key{}))
 	})
 }
