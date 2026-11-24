@@ -2,15 +2,19 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/edaniel30/rabbitmq-kit-go/config"
+	kiterrors "github.com/edaniel30/rabbitmq-kit-go/errors"
 	"github.com/edaniel30/rabbitmq-kit-go/router"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -151,4 +155,145 @@ func TestTracing_Integration(t *testing.T) {
 		}
 		return pub && cons
 	}, 2*time.Second, 50*time.Millisecond)
+}
+
+// publishSpans returns the ended PRODUCER spans of the recorder.
+func publishSpans(recorder *tracetest.SpanRecorder) []sdktrace.ReadOnlySpan {
+	var spans []sdktrace.ReadOnlySpan
+	for _, s := range recorder.Ended() {
+		if s.SpanKind() == trace.SpanKindProducer {
+			spans = append(spans, s)
+		}
+	}
+	return spans
+}
+
+func TestPublishBatchTracing_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	t.Run("one span per event, error status on serialization failure", func(t *testing.T) {
+		recorder := setupTelemetry(t)
+		eb, err := NewEventBus(baseConfig())
+		require.NoError(t, err)
+		defer func() { _ = eb.Close() }()
+
+		events := []Event{
+			newTestEvent("test.exchange", "test.event", "a"),
+			&badEvent{},
+			newTestEvent("test.exchange", "test.event", "b"),
+		}
+		result, err := eb.PublishBatch(context.Background(), events, config.WithPipelining(true))
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Failed)
+
+		assert.Len(t, recorder.Started(), 3)
+		spans := publishSpans(recorder)
+		require.Len(t, spans, 3, "every span ended exactly once")
+
+		var errored int
+		for _, s := range spans {
+			if s.Status().Code == codes.Error {
+				errored++
+			}
+		}
+		assert.Equal(t, 1, errored)
+	})
+
+	t.Run("span status follows each message's confirmation", func(t *testing.T) {
+		recorder := setupTelemetry(t)
+		cfg := baseConfig()
+		cfg.PublisherConfirms = true
+		cfg.ConfirmTimeout = time.Nanosecond // confirmations time out: per-message errors
+		eb, err := NewEventBus(cfg)
+		require.NoError(t, err)
+		defer func() { _ = eb.Close() }()
+
+		events := []Event{
+			newTestEvent("test.exchange", "test.event", "c"),
+			newTestEvent("test.exchange", "test.event", "d"),
+		}
+		result, err := eb.PublishBatch(context.Background(), events, config.WithPipelining(true))
+		require.NoError(t, err)
+
+		spans := publishSpans(recorder)
+		require.Len(t, spans, 2)
+
+		var errored int
+		for _, s := range spans {
+			if s.Status().Code == codes.Error {
+				errored++
+			}
+		}
+		// Each failed confirmation (msgErr) is recorded on its own span, whatever the timing
+		assert.Equal(t, result.Failed, errored)
+	})
+
+	t.Run("fatal error ends every span with error status", func(t *testing.T) {
+		recorder := setupTelemetry(t)
+		eb, err := NewEventBus(baseConfig())
+		require.NoError(t, err)
+		_ = eb.Close()
+
+		events := []Event{
+			newTestEvent("test.exchange", "test.event", "e"),
+			newTestEvent("test.exchange", "test.event", "f"),
+		}
+		_, err = eb.PublishBatch(context.Background(), events, config.WithPipelining(true))
+		require.Error(t, err)
+
+		spans := publishSpans(recorder)
+		require.Len(t, spans, 2)
+		for _, s := range spans {
+			assert.Equal(t, codes.Error, s.Status().Code)
+		}
+	})
+}
+
+// failingHandler fails, as a permanent error so it is not retried, for the message it watches.
+type failingHandler struct {
+	message string
+}
+
+func (h *failingHandler) Execute(msg *router.MessageContext) error {
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := msg.BindJSON(&body); err != nil {
+		return err
+	}
+	if body.Message != h.message {
+		return nil
+	}
+	return kiterrors.NewPermanentError(errors.New("handler failed"))
+}
+
+func TestConsumerSpanErrorStatus_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	recorder := setupTelemetry(t)
+	eb, err := NewEventBus(baseConfig())
+	require.NoError(t, err)
+	defer func() { _ = eb.Close() }()
+
+	eb.RegisterHandler("test.event", &failingHandler{message: "fail-traced"})
+	go func() { _ = eb.StartConsume("test.queue", 1) }()
+	time.Sleep(100 * time.Millisecond)
+
+	reqCtx, reqSpan := otel.Tracer("test").Start(context.Background(), "POST /fail")
+	require.NoError(t, eb.Publish(reqCtx, newTestEvent("test.exchange", "test.event", "fail-traced")))
+	reqSpan.End()
+
+	assert.Eventually(t, func() bool {
+		for _, s := range recorder.Ended() {
+			if s.SpanKind() == trace.SpanKindConsumer &&
+				s.SpanContext().TraceID() == reqSpan.SpanContext().TraceID() {
+				return s.Status().Code == codes.Error
+			}
+		}
+		return false
+	}, 3*time.Second, 50*time.Millisecond)
 }

@@ -177,6 +177,7 @@ func (c *Consumer) processDelivery(queue string, workerID int, delivery amqp.Del
 			},
 		)
 		// Nack without requeue - let DLX handle it or discard
+		handlerErr = stderrors.New("circuit breaker open, message rejected")
 		_ = messageContext.Nack(false)
 		return
 	}
