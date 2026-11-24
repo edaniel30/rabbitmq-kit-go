@@ -281,8 +281,14 @@ make setup  # Install once
 ### Event Routing
 - Events MUST have `"type"` field in JSON for routing
 - Event type = routing key
-- `trace_id` is automatically injected on publish if not present in `Headers()`
+- `trace_id` is automatically injected on publish if not present (or empty) in `Headers()`: the OpenTelemetry trace ID of the publishing context, or a new UUID
 - Retrieve with `ctx.GetTraceID()` in handlers
+
+### Tracing (`internal/tracing`)
+- Uses the global OpenTelemetry `TracerProvider` and propagator; no-ops when the application has no telemetry
+- Publish: PRODUCER span `publish <routing key>`, trace context injected into the headers (`traceparent`); one span per event in pipelined batches, ended when its confirmation arrives
+- Consume: CONSUMER span `process <event type>`, child of the producer span (extracted from the headers), ended after ack/retry/nack; error status when the handler fails
+- Handlers get the span through `MessageContext.Context()` (`router.NewMessageContext`); the consumer's own logs use that context too
 
 ### Retry Behavior
 - Max retries default: 3

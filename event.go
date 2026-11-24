@@ -1,10 +1,12 @@
 package rabbitmq
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"time"
 
+	"github.com/edaniel30/rabbitmq-kit-go/internal/tracing"
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -34,17 +36,25 @@ type Event interface {
 //
 // The body is the event to JSON.
 //
+// The trace context of ctx (the publish span) is injected into the headers (W3C traceparent),
+// so the consumer's span joins the same trace. If the event sets no trace_id header (or an
+// empty one), it is the OpenTelemetry trace ID of ctx, or a new UUID without telemetry.
+//
 // The return value is the publishing and an error if the event cannot be marshaled.
-func createDefaultPublishing(event Event) (amqp.Publishing, error) {
-	headersToSend := make(map[string]any)
-	// Sent new traceid header if not present
+func createDefaultPublishing(ctx context.Context, event Event) (amqp.Publishing, error) {
+	headersToSend := amqp.Table{}
 	if headers := event.Headers(); headers != nil {
 		maps.Copy(headersToSend, headers)
 	}
 
-	if headersToSend["trace_id"] == nil {
-		headersToSend["trace_id"] = uuid.New().String()
+	if traceID, _ := headersToSend["trace_id"].(string); traceID == "" {
+		if traceID = tracing.TraceID(ctx); traceID == "" {
+			traceID = uuid.New().String()
+		}
+		headersToSend["trace_id"] = traceID
 	}
+
+	tracing.Inject(ctx, headersToSend)
 
 	body, err := json.Marshal(event.ToMap())
 	if err != nil {
