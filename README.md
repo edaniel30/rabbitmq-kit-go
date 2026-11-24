@@ -125,7 +125,25 @@ func (e *UserCreatedEvent) ToMap() map[string]any {
 }
 ```
 
-A `trace_id` header is automatically injected on publish if not already present in `Headers()`. When consuming, retrieve it with `ctx.GetTraceID()`.
+A `trace_id` header is automatically injected on publish if not already present (or empty) in `Headers()`: the OpenTelemetry trace ID of the publishing context, or a new UUID without telemetry. When consuming, retrieve it with `ctx.GetTraceID()`.
+
+### Distributed Tracing (OpenTelemetry)
+
+With OpenTelemetry set up in the application (a global `TracerProvider` and the W3C `TraceContext` propagator, as http-platform-go's telemetry does), the kit traces messages with no configuration:
+
+- `Publish` / `PublishBatch` record a **PRODUCER** span (`publish <routing key>`) and write the trace context into the message headers (`traceparent`).
+- The consumer extracts it and records a **CONSUMER** span (`process <event type>`), child of the producer span; a handler error sets the span status to Error.
+- The handler gets that span through `msg.Context()`. Derive the handler's contexts from it instead of `context.Background()`, so its own spans (HTTP clients, databases) and logs join the trace of the request that published the event:
+
+```go
+func (h *Handler) Execute(msg *router.MessageContext) error {
+    ctx, cancel := context.WithTimeout(msg.Context(), 30*time.Second)
+    defer cancel()
+    // ...
+}
+```
+
+Without telemetry the global provider and propagator are no-ops: no spans, no extra headers, nothing changes. Retries keep the original `traceparent`, so every attempt joins the same trace.
 
 ### Handler Return Values
 

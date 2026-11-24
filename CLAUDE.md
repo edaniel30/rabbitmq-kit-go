@@ -281,8 +281,14 @@ make setup  # Install once
 ### Event Routing
 - Events MUST have `"type"` field in JSON for routing
 - Event type = routing key
-- `trace_id` is automatically injected on publish if not present in `Headers()`
+- `trace_id` is automatically injected on publish if not present (or empty) in `Headers()`: the OpenTelemetry trace ID of the publishing context, or a new UUID
 - Retrieve with `ctx.GetTraceID()` in handlers
+
+### Tracing (`internal/tracing`)
+- Uses the global OpenTelemetry `TracerProvider` and propagator; no-ops when the application has no telemetry
+- Publish: PRODUCER span `publish <routing key>`, trace context injected into the headers (`traceparent`); one span per event in pipelined batches, ended when its confirmation arrives
+- Consume: CONSUMER span `process <event type>`, child of the producer span (extracted from the headers), ended after ack/retry/nack; error status when the handler fails
+- Handlers get the span through `MessageContext.Context()` (`router.NewMessageContext`); the consumer's own logs use that context too
 
 ### Retry Behavior
 - Max retries default: 3
@@ -492,6 +498,16 @@ func (e *OrderCompletedEvent) ToMap() map[string]any {
 - **docs/DLQ.md** - Dead letter queue configuration
 - **docs/BATCH_PUBLISHING.md** - Batch publishing strategies
 - **examples/** - Complete working examples for all features
+
+---
+
+## Release Process
+
+Versions are automatic (`.github/workflows/release.yml`, config in `.releaserc.json`):
+
+1. Work goes to `develop` through PRs. **Commit messages follow conventional commits** (`feat(consumer): ...`, `fix(publisher): ...`): the version is computed from them, never from the branch name. `scripts/conventional-commit.sh` checks them twice: locally as a `commit-msg` hook (`make setup` runs `pre-commit install`, which installs it) and in CI on every commit of the PR (job *Conventional commits*). Fix a rejected one with `git rebase -i` (reword) and push again.
+2. A `release/*` (or `hotfix/*`) PR to `main` is merged **with a merge commit, never squash**: a squash leaves one `Release: ...` commit on `main`, which is not conventional, so nothing is released.
+3. On the push to `main`, semantic-release reads the commits since the last `v*` tag: a breaking change (`!` or `BREAKING CHANGE:`) → major; `feat` → minor; `fix`, `perf`, `refactor`, `revert`, `build` → patch; `docs`, `test`, `ci`, `chore`, `style` → no release. It creates the tag (the Go module version) and the GitHub Release with the notes; it commits nothing to `main`.
 
 ---
 

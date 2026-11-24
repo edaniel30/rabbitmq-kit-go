@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -14,6 +15,24 @@ const (
 // MessageContext wraps an AMQP delivery with helper methods.
 type MessageContext struct {
 	Delivery amqp.Delivery
+
+	ctx context.Context
+}
+
+// NewMessageContext wraps a delivery with the context its handler runs in.
+func NewMessageContext(ctx context.Context, delivery amqp.Delivery) *MessageContext {
+	return &MessageContext{Delivery: delivery, ctx: ctx}
+}
+
+// Context returns the context of the message. With OpenTelemetry set up in the application,
+// it carries the consumer span, child of the span that published the message: derive the
+// handler's contexts from it (instead of context.Background()) so its spans and logs join the
+// publisher's trace. Never nil.
+func (c *MessageContext) Context() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // BindJSON unmarshals the message body into the provided value.
