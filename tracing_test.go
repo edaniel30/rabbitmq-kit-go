@@ -297,3 +297,38 @@ func TestConsumerSpanErrorStatus_Integration(t *testing.T) {
 		return false
 	}, 3*time.Second, 50*time.Millisecond)
 }
+
+type expectedRetryHandler struct{}
+
+func (h *expectedRetryHandler) Execute(*router.MessageContext) error {
+	return kiterrors.NewExpectedRetryError(errors.New("version conflict"))
+}
+
+func TestConsumerSpanExpectedRetryIsNotAnError_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	recorder := setupTelemetry(t)
+	eb, err := NewEventBus(baseConfig())
+	require.NoError(t, err)
+	defer func() { _ = eb.Close() }()
+
+	eb.RegisterHandler("test.event", &expectedRetryHandler{})
+	go func() { _ = eb.StartConsume("test.queue", 1) }()
+	time.Sleep(100 * time.Millisecond)
+
+	reqCtx, reqSpan := otel.Tracer("test").Start(context.Background(), "POST /conflict")
+	require.NoError(t, eb.Publish(reqCtx, newTestEvent("test.exchange", "test.event", "conflict")))
+	reqSpan.End()
+
+	assert.Eventually(t, func() bool {
+		for _, s := range recorder.Ended() {
+			if s.SpanKind() == trace.SpanKindConsumer &&
+				s.SpanContext().TraceID() == reqSpan.SpanContext().TraceID() {
+				return s.Status().Code == codes.Unset && len(s.Events()) == 1 && s.Events()[0].Name == "expected retry"
+			}
+		}
+		return false
+	}, 3*time.Second, 50*time.Millisecond)
+}
