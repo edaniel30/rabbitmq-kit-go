@@ -223,6 +223,10 @@ func (c *Consumer) processDelivery(queue string, workerID int, delivery amqp.Del
 			// Error so it doesn't carry a stack trace or read as
 			// something that needs investigation.
 			c.client.config.Logger.Warn(ctx, "Consumer Worker: Handler error (expected, retrying)", logFields)
+			// Not an error on the span either: an event, so routine
+			// conflicts do not raise the service's error rate
+			tracing.MarkExpectedRetry(span, err)
+			handlerErr = nil
 		} else {
 			c.client.config.Logger.Error(ctx, "Consumer Worker: Handler error", logFields)
 		}
