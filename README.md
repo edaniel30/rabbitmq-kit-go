@@ -132,7 +132,7 @@ A `trace_id` header is automatically injected on publish if not already present 
 With OpenTelemetry set up in the application (a global `TracerProvider` and the W3C `TraceContext` propagator, as http-platform-go's telemetry does), the kit traces messages with no configuration:
 
 - `Publish` / `PublishBatch` record a **PRODUCER** span (`publish <routing key>`) and write the trace context into the message headers (`traceparent`).
-- The consumer extracts it and records a **CONSUMER** span (`process <event type>`), child of the producer span; a handler error sets the span status to Error.
+- The consumer extracts it and records a **CONSUMER** span (`process <event type>`), child of the producer span; a handler error sets the span status to Error, except one wrapped with `errors.NewExpectedRetryError`: it is retried as usual, but recorded as an `expected retry` event with `messaging.rabbitmq.expected_retry=true`, so routine conflicts do not raise the error rate.
 - The handler gets that span through `msg.Context()`. Derive the handler's contexts from it instead of `context.Background()`, so its own spans (HTTP clients, databases) and logs join the trace of the request that published the event:
 
 ```go

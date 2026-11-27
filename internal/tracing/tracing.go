@@ -107,6 +107,16 @@ func StartConsume(delivery amqp.Delivery, queue, eventType string) (context.Cont
 	)
 }
 
+// MarkExpectedRetry records a handler error marked as expected
+// (errors.NewExpectedRetryError: an optimistic-concurrency conflict that heals
+// on retry) as an event and an attribute instead of the span's status, so
+// routine retries do not count as errors in trace backends. End the span
+// with a nil error afterwards.
+func MarkExpectedRetry(span trace.Span, err error) {
+	span.SetAttributes(attribute.Bool("messaging.rabbitmq.expected_retry", true))
+	span.AddEvent("expected retry", trace.WithAttributes(attribute.String("error.message", err.Error())))
+}
+
 // End records err on the span (status Error) and ends it.
 func End(span trace.Span, err error) {
 	if err != nil {
